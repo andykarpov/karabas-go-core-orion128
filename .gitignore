@@ -71,6 +71,8 @@ _xmsgs/
 !src/karabas_*.prj
 !src/karabas_*.xst
 !src/karabas_*.ut
+!src/orion.prj
+!src/orion.xst
 
 # simulation builds and make stamps
 src/sim/build/
