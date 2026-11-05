@@ -6,6 +6,14 @@ module tb_boot (
 	input wire clk,
 	input wire reset,
 	input wire cpu_z80,
+	input wire [1:0] cpu_speed,
+	input wire [1:0] ram_size,
+	input wire kb_ms7007,
+	input wire file_active,
+	input wire [7:0] file_slot,
+	input wire [31:0] file_addr,
+	input wire [7:0] file_data,
+	input wire file_wr,
 	input wire rom_active,
 	input wire [21:0] rom_addr,
 	input wire [7:0] rom_data,
@@ -26,9 +34,9 @@ wire [15:0] MD;
 wire [1:0] MWR_N;
 
 orion_system sys (
-	.clk(clk), .reset(reset), .cpu_z80(cpu_z80),
+	.clk(clk), .reset(reset), .cpu_z80(cpu_z80), .cpu_speed(cpu_speed), .ram_size(ram_size), .kb_ms7007(kb_ms7007),
 	.rom_active(rom_active), .rom_addr(rom_addr), .rom_data(rom_data), .rom_wr(rom_wr),
-	.file_active(1'b0), .file_slot(8'd0), .file_addr(32'd0), .file_data(8'd0), .file_wr(1'b0),
+	.file_active(file_active), .file_slot(file_slot), .file_addr(file_addr), .file_data(file_data), .file_wr(file_wr),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd),
 	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)

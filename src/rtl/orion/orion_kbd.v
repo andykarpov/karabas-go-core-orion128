@@ -10,11 +10,18 @@
 
  The layout is that of orion2010-zxuno (orionkeyboard.v). A column of the matrix is entry 0, 7, 6 .. 1
  of its table for scan bits 0, 1, 2 .. 7, as there.
+
+ ms7007: the keyboard of the MS7007 Monitors: the same 8 columns, rows 0..7 on port B and 9..11 on
+ D5..7 of port C. The crossings are those of kosarev/orion128 (_keyboard.py), read off the Monitor.
+ Its Shift is not that of a PC: a shifted host key gives the crossings of the US character, some
+ with the Orion shift (5, 9) as well. They are taken when the key goes down; its release clears
+ both crossings of the key. Change ms7007 only during reset.
 */
 
 module orion_kbd (
 	input wire clk,
 	input wire reset,
+	input wire ms7007,
 	input wire [7:0] scancode,
 	input wire scancode_upd,    // toggles with each byte
 	input wire [7:0] scan,
@@ -26,6 +33,9 @@ reg upd_d = 1'b0;
 reg ext = 1'b0, rel = 1'b0;
 reg ss = 1'b0, us = 1'b0, rl = 1'b0;
 reg [63:0] km = 64'd0;        // { entry, bit }
+reg [127:0] ms = 128'd0;      // { column, row }
+reg hs = 1'b0;                // the Shift of the host
+reg ms_sh = 1'b0;             // the Orion shift of the keys held
 
 reg [6:0] pos;                // { valid, entry, bit }
 always @* begin
@@ -98,6 +108,108 @@ always @* begin
 	endcase
 end
 
+// MS7007: { valid, column, row }
+reg [7:0] mb;
+always @* begin
+	case ({ ext, scancode })
+		9'h01C: mb = 8'h80 | 8'h44;  // A
+		9'h032: mb = 8'h80 | 8'h40;  // B
+		9'h021: mb = 8'h80 | 8'h32;  // C
+		9'h023: mb = 8'h80 | 8'h31;  // D
+		9'h024: mb = 8'h80 | 8'h27;  // E
+		9'h02B: mb = 8'h80 | 8'h3B;  // F
+		9'h034: mb = 8'h80 | 8'h36;  // G
+		9'h033: mb = 8'h80 | 8'h70;  // H
+		9'h043: mb = 8'h80 | 8'h47;  // I
+		9'h03B: mb = 8'h80 | 8'h2B;  // J
+		9'h042: mb = 8'h80 | 8'h34;  // K
+		9'h04B: mb = 8'h80 | 8'h30;  // L
+		9'h03A: mb = 8'h80 | 8'h54;  // M
+		9'h031: mb = 8'h80 | 8'h35;  // N
+		9'h044: mb = 8'h80 | 8'h46;  // O
+		9'h04D: mb = 8'h80 | 8'h37;  // P
+		9'h015: mb = 8'h80 | 8'h4B;  // Q
+		9'h02D: mb = 8'h80 | 8'h45;  // R
+		9'h01B: mb = 8'h80 | 8'h53;  // S
+		9'h02C: mb = 8'h80 | 8'h55;  // T
+		9'h03C: mb = 8'h80 | 8'h33;  // U
+		9'h02A: mb = 8'h80 | 8'h61;  // V
+		9'h01D: mb = 8'h80 | 8'h43;  // W
+		9'h022: mb = 8'h80 | 8'h56;  // X
+		9'h035: mb = 8'h80 | 8'h42;  // Y
+		9'h01A: mb = 8'h80 | 8'h71;  // Z
+		9'h045, 9'h070: mb = 8'h80 | 8'h6A;  // 0
+		9'h016, 9'h069: mb = 8'h80 | 8'h6B;  // 1
+		9'h01E, 9'h072: mb = 8'h80 | 8'h7B;  // 2
+		9'h026, 9'h07A: mb = 8'h80 | 8'h0B;  // 3
+		9'h025, 9'h06B: mb = 8'h80 | 8'h62;  // 4
+		9'h02E, 9'h073: mb = 8'h80 | 8'h72;  // 5
+		9'h036, 9'h074: mb = 8'h80 | 8'h02;  // 6
+		9'h03D, 9'h06C: mb = 8'h80 | 8'h69;  // 7
+		9'h03E, 9'h075: mb = 8'h80 | 8'h79;  // 8
+		9'h046, 9'h07D: mb = 8'h80 | 8'h09;  // 9
+		9'h049: mb = 8'h80 | 8'h7A;  // .
+		9'h041: mb = 8'h80 | 8'h19;  // ,
+		9'h04C: mb = 8'h80 | 8'h1B;  // ;
+		9'h04A, 9'h14A: mb = 8'h80 | 8'h05;  // /
+		9'h04E: mb = 8'h80 | 8'h29;  // -
+		9'h055: mb = 8'h80 | 8'h06;  // =
+		9'h052: mb = 8'h80 | 8'h10;  // '
+		9'h054: mb = 8'h80 | 8'h20;  // [
+		9'h05B: mb = 8'h80 | 8'h21;  // ]
+		9'h05D: mb = 8'h80 | 8'h60;  // backslash
+		9'h029: mb = 8'h80 | 8'h00;  // Space
+		9'h05A, 9'h15A: mb = 8'h80 | 8'h0A;  // Enter
+		9'h16B: mb = 8'h80 | 8'h50;  // Left
+		9'h174: mb = 8'h80 | 8'h67;  // Right
+		9'h175: mb = 8'h80 | 8'h75;  // Up
+		9'h172: mb = 8'h80 | 8'h65;  // Down
+		9'h066: mb = 8'h80 | 8'h64;  // Backspace
+		9'h076: mb = 8'h80 | 8'h1A;  // Esc
+		9'h00D: mb = 8'h80 | 8'h2A;  // Tab
+		9'h005: mb = 8'h80 | 8'h12;  // F1
+		9'h006: mb = 8'h80 | 8'h13;  // F2
+		9'h004: mb = 8'h80 | 8'h14;  // F3
+		9'h00C: mb = 8'h80 | 8'h15;  // F4
+		9'h003: mb = 8'h80 | 8'h16;  // F5
+		9'h00B: mb = 8'h80 | 8'h73;  // F6 (ISP)
+		9'h170: mb = 8'h80 | 8'h03;  // Insert
+		9'h16C: mb = 8'h80 | 8'h74;  // Home
+		9'h169: mb = 8'h80 | 8'h04;  // End
+		default: mb = 8'h00;
+	endcase
+end
+
+// the shifted symbols: { valid, the Orion shift too, column, row[3:0] }, the column in bits 6:4 of ms
+reg [8:0] mz;
+wire [2:0] mz_col = mz[6:4];
+always @* begin
+	case ({ ext, scancode })
+		9'h016: mz = 9'h122;  // !
+		9'h01E: mz = 9'h141;  // @
+		9'h026: mz = 9'h124;  // #
+		9'h025: mz = 9'h117;  // $
+		9'h02E: mz = 9'h125;  // %
+		9'h036: mz = 9'h152;  // ^
+		9'h03D: mz = 9'h126;  // &
+		9'h03E: mz = 9'h187;  // *
+		9'h046: mz = 9'h111;  // (
+		9'h045: mz = 9'h101;  // )
+		9'h04E: mz = 9'h176;  // _
+		9'h055: mz = 9'h163;  // +
+		9'h04C: mz = 9'h107;  // :
+		9'h052: mz = 9'h123;  // "
+		9'h041: mz = 9'h151;  // <
+		9'h049: mz = 9'h166;  // >
+		9'h04A: mz = 9'h185;  // ?
+		9'h054: mz = 9'h1A0;  // {
+		9'h05B: mz = 9'h1A1;  // }
+		9'h05D: mz = 9'h1E0;  // |
+		9'h00E: mz = 9'h1D2;  // ~
+		default: mz = 9'h000;
+	endcase
+end
+
 always @(posedge clk) begin
 	upd_d <= scancode_upd;
 	if (reset) begin
@@ -107,6 +219,9 @@ always @(posedge clk) begin
 		us <= 1'b0;
 		rl <= 1'b0;
 		km <= 64'd0;
+		ms <= 128'd0;
+		hs <= 1'b0;
+		ms_sh <= 1'b0;
 	end
 	else if (scancode_upd != upd_d) begin
 		if (scancode == 8'hE0)
@@ -116,14 +231,36 @@ always @(posedge clk) begin
 		else begin
 			ext <= 1'b0;
 			rel <= 1'b0;
-			if ({ ext, scancode } == 9'h012 || { ext, scancode } == 9'h059)
+			if ({ ext, scancode } == 9'h012 || { ext, scancode } == 9'h059) begin
 				ss <= ~rel;
-			else if (scancode == 8'h14)      // both Ctrl keys
+				hs <= ~rel;
+				if (rel)
+					ms_sh <= 1'b0;
+			end
+			else if (scancode == 8'h14) begin    // both Ctrl keys
 				us <= ~rel;
-			else if ({ ext, scancode } == 9'h058)
+				ms[{ 3'd5, 4'd10 }] <= ~rel;
+			end
+			else if ({ ext, scancode } == 9'h058) begin
 				rl <= ~rel;
-			else if (pos[6])
-				km[pos[5:0]] <= ~rel;
+				ms[{ 3'd5, 4'd11 }] <= ~rel;   // FIX, RUS/LAT
+			end
+			else begin
+				if (pos[6])
+					km[pos[5:0]] <= ~rel;
+				if (rel) begin
+					if (mb[7]) ms[mb[6:0]] <= 1'b0;
+					if (mz[8]) ms[{ mz_col, mz[3:0] }] <= 1'b0;
+				end
+				else if (hs && mz[8]) begin
+					ms[{ mz_col, mz[3:0] }] <= 1'b1;
+					ms_sh <= mz[7];
+				end
+				else if (mb[7]) begin
+					ms[mb[6:0]] <= 1'b1;
+					ms_sh <= hs;
+				end
+			end
 		end
 	end
 end
@@ -134,10 +271,24 @@ function [7:0] col;
 	        km[{ e, 3'd3 }], km[{ e, 3'd2 }], km[{ e, 3'd1 }], km[{ e, 3'd0 }] };
 endfunction
 
-assign ret = ~( (scan[0] ? 8'd0 : col(3'd0)) | (scan[1] ? 8'd0 : col(3'd7)) |
-                (scan[2] ? 8'd0 : col(3'd6)) | (scan[3] ? 8'd0 : col(3'd5)) |
-                (scan[4] ? 8'd0 : col(3'd4)) | (scan[5] ? 8'd0 : col(3'd3)) |
-                (scan[6] ? 8'd0 : col(3'd2)) | (scan[7] ? 8'd0 : col(3'd1)) );
-assign pc_hi = { ~rl, ~us, ~ss, 1'b1 };
+wire [7:0] ret_rk = ~( (scan[0] ? 8'd0 : col(3'd0)) | (scan[1] ? 8'd0 : col(3'd7)) |
+                       (scan[2] ? 8'd0 : col(3'd6)) | (scan[3] ? 8'd0 : col(3'd5)) |
+                       (scan[4] ? 8'd0 : col(3'd4)) | (scan[5] ? 8'd0 : col(3'd3)) |
+                       (scan[6] ? 8'd0 : col(3'd2)) | (scan[7] ? 8'd0 : col(3'd1)) );
+
+// MS7007: a column read gives its rows 0..11; the Orion shift is (5, 9)
+function [11:0] mc;
+	input [2:0] c;
+	mc = { ms[{ c, 4'd11 }], ms[{ c, 4'd10 }], ms[{ c, 4'd9 }] | (c == 3'd5 && ms_sh), 1'b0,
+	       ms[{ c, 4'd7 }], ms[{ c, 4'd6 }], ms[{ c, 4'd5 }], ms[{ c, 4'd4 }],
+	       ms[{ c, 4'd3 }], ms[{ c, 4'd2 }], ms[{ c, 4'd1 }], ms[{ c, 4'd0 }] };
+endfunction
+wire [11:0] ret_ms = ~( (scan[0] ? 12'd0 : mc(3'd0)) | (scan[1] ? 12'd0 : mc(3'd1)) |
+                        (scan[2] ? 12'd0 : mc(3'd2)) | (scan[3] ? 12'd0 : mc(3'd3)) |
+                        (scan[4] ? 12'd0 : mc(3'd4)) | (scan[5] ? 12'd0 : mc(3'd5)) |
+                        (scan[6] ? 12'd0 : mc(3'd6)) | (scan[7] ? 12'd0 : mc(3'd7)) );
+
+assign ret = ms7007 ? ret_ms[7:0] : ret_rk;
+assign pc_hi = ms7007 ? ret_ms[11:8] : { ~rl, ~us, ~ss, 1'b1 };
 
 endmodule

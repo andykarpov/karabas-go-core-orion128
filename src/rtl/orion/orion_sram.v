@@ -42,6 +42,7 @@ module orion_sram (
 	input wire we,
 	input wire [7:0] din,
 	output reg [7:0] dout = 8'hFF,
+	output wire rd_ok,           // dout is the byte at addr (the turbo modes wait for it)
 
 	input wire aux_req,
 	input wire aux_we,
@@ -77,6 +78,8 @@ reg q_aux = 1'b0;
 reg aux_turn = 1'b0; // the next slot may go to the aux port
 reg aux_busy = 1'b0; // an aux request is in a slot, not acked yet
 reg vid_pend = 1'b0;
+reg [21:0] s_addr = 22'd0, q_addr = 22'd0, dout_addr = 22'd0;  // the machine's read in its slots
+reg dout_v = 1'b0;
 reg s_vid = 1'b0;    // the slot is the video's
 reg q_vid = 1'b0;
 
@@ -95,6 +98,7 @@ always @(posedge clk) begin
 
 	// a write request: taken at the rising edge of we
 	if (we_q && !we_d) begin
+		dout_v <= 1'b0;
 		wr_pend <= 1'b1;
 		wr_addr <= addr_q;
 		wr_data <= din_q;
@@ -120,8 +124,11 @@ always @(posedge clk) begin
 			aux_dout <= q_lane ? md_q[15:8] : md_q[7:0];
 			aux_ack <= 1'b1;
 		end
-		else
+		else begin
 			dout <= q_lane ? md_q[15:8] : md_q[7:0];
+			dout_addr <= q_addr;
+			dout_v <= 1'b1;
+		end
 	end
 	q_valid <= 1'b0;
 
@@ -132,6 +139,7 @@ always @(posedge clk) begin
 		q_lane <= s_lane;
 		q_aux <= s_aux;
 		q_vid <= s_vid;
+		q_addr <= s_addr;
 		s_vid <= 1'b0;
 		if (s_aux && s_we)
 			aux_ack <= 1'b1;   // an aux write ends with its slot
@@ -165,6 +173,7 @@ always @(posedge clk) begin
 		else begin
 			MA <= addr_q[21:1];
 			s_lane <= addr_q[0];
+			s_addr <= addr_q;
 			s_we <= 1'b0;
 			s_read <= 1'b1;
 		end
@@ -182,6 +191,7 @@ always @(negedge clk) begin
 	end
 end
 assign MWR_N = we_n;
+assign rd_ok = dout_v && dout_addr == addr;
 assign MD[7:0] = !we_n[0] ? md_out[7:0] : 8'bz;
 assign MD[15:8] = !we_n[1] ? md_out[15:8] : 8'bz;
 
