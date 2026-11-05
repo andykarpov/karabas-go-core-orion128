@@ -9,7 +9,10 @@
  the high half of port C: { RUS/LAT (Caps Lock), US (Ctrl), SS (Shift), 1 }, all active low.
 
  The layout is that of orion2010-zxuno (orionkeyboard.v). A column of the matrix is entry 0, 7, 6 .. 1
- of its table for scan bits 0, 1, 2 .. 7, as there.
+ of its table for scan bits 0, 1, 2 .. 7, as there, with the punctuation corrected against OriZEmu.
+ The Orion shift is not that of a PC here too (: is a key of its own, its shift gives *, ; gives +,
+ - gives =): rz and ru give the crossing of the US character, with or without the Orion shift, for
+ the keys that differ. They are taken when the key goes down; its release clears them.
 
  ms7007: the keyboard of the MS7007 Monitors: the same 8 columns, rows 0..7 on port B and 9..11 on
  D5..7 of port C. The crossings are those of kosarev/orion128 (_keyboard.py), read off the Monitor.
@@ -72,7 +75,6 @@ always @* begin
 		9'h03A: pos = 7'o135;  // M
 		9'h031: pos = 7'o136;  // N
 		9'h044: pos = 7'o137;  // O
-		9'h052: pos = 7'o140;  // '
 		9'h01C: pos = 7'o141;  // A
 		9'h032: pos = 7'o142;  // B
 		9'h021: pos = 7'o143;  // C
@@ -82,10 +84,10 @@ always @* begin
 		9'h034: pos = 7'o147;  // G
 		9'h03E, 9'h075: pos = 7'o150;  // 8
 		9'h046, 9'h07D: pos = 7'o151;  // 9
-		9'h04C, 9'h07C: pos = 7'o152;  // ; (keypad *)
-		9'h04E, 9'h079: pos = 7'o153;  // - (keypad +)
+		9'h07C: pos = 7'o152;          // keypad *
+		9'h04C, 9'h079: pos = 7'o153;  // ; (keypad +)
 		9'h041: pos = 7'o154;          // ,
-		9'h055, 9'h07B: pos = 7'o155;  // = (keypad -)
+		9'h04E, 9'h07B: pos = 7'o155;  // - (keypad -)
 		9'h049, 9'h071: pos = 7'o156;  // .
 		9'h04A, 9'h14A: pos = 7'o157;  // /
 		9'h045, 9'h070: pos = 7'o160;  // 0
@@ -107,6 +109,30 @@ always @* begin
 		default: pos = 7'o000;
 	endcase
 end
+
+// RK-86, the keys that differ from a PC: { valid, the Orion shift, entry, bit }; ru with no Shift
+// held, rz with Shift held
+reg [7:0] ru, rz;
+always @* begin
+	case ({ ext, scancode })
+		9'h055: ru = { 2'b11, 3'd5, 3'd5 };  // =
+		9'h052: ru = { 2'b11, 3'd6, 3'd7 };  // '
+		default: ru = 8'd0;
+	endcase
+	case ({ ext, scancode })
+		9'h01E: rz = { 2'b10, 3'd4, 3'd0 };  // @
+		9'h036: rz = { 2'b10, 3'd1, 3'd6 };  // ^
+		9'h03D: rz = { 2'b11, 3'd6, 3'd6 };  // &
+		9'h03E: rz = { 2'b11, 3'd5, 3'd2 };  // *
+		9'h046: rz = { 2'b11, 3'd5, 3'd0 };  // (
+		9'h045: rz = { 2'b11, 3'd5, 3'd1 };  // )
+		9'h04C: rz = { 2'b10, 3'd5, 3'd2 };  // :
+		9'h055: rz = { 2'b11, 3'd5, 3'd3 };  // +
+		9'h052: rz = { 2'b11, 3'd6, 3'd2 };  // "
+		default: rz = 8'd0;
+	endcase
+end
+reg rk_force = 1'b0, rk_sh = 1'b0;
 
 // MS7007: { valid, column, row }
 reg [7:0] mb;
@@ -222,6 +248,8 @@ always @(posedge clk) begin
 		ms <= 128'd0;
 		hs <= 1'b0;
 		ms_sh <= 1'b0;
+		rk_force <= 1'b0;
+		rk_sh <= 1'b0;
 	end
 	else if (scancode_upd != upd_d) begin
 		if (scancode == 8'hE0)
@@ -246,8 +274,24 @@ always @(posedge clk) begin
 				ms[{ 3'd5, 4'd11 }] <= ~rel;   // FIX, RUS/LAT
 			end
 			else begin
-				if (pos[6])
-					km[pos[5:0]] <= ~rel;
+				if (rel) begin
+					if (pos[6]) km[pos[5:0]] <= 1'b0;
+					if (ru[7]) km[ru[5:0]] <= 1'b0;
+					if (rz[7]) km[rz[5:0]] <= 1'b0;
+					rk_force <= 1'b0;
+				end
+				else if (hs && rz[7]) begin
+					km[rz[5:0]] <= 1'b1;
+					rk_force <= 1'b1;
+					rk_sh <= rz[6];
+				end
+				else if (!hs && ru[7]) begin
+					km[ru[5:0]] <= 1'b1;
+					rk_force <= 1'b1;
+					rk_sh <= ru[6];
+				end
+				else if (pos[6])
+					km[pos[5:0]] <= 1'b1;
 				if (rel) begin
 					if (mb[7]) ms[mb[6:0]] <= 1'b0;
 					if (mz[8]) ms[{ mz_col, mz[3:0] }] <= 1'b0;
@@ -289,6 +333,6 @@ wire [11:0] ret_ms = ~( (scan[0] ? 12'd0 : mc(3'd0)) | (scan[1] ? 12'd0 : mc(3'd
                         (scan[6] ? 12'd0 : mc(3'd6)) | (scan[7] ? 12'd0 : mc(3'd7)) );
 
 assign ret = ms7007 ? ret_ms[7:0] : ret_rk;
-assign pc_hi = ms7007 ? ret_ms[11:8] : { ~rl, ~us, ~ss, 1'b1 };
+assign pc_hi = ms7007 ? ret_ms[11:8] : { ~rl, ~us, ~(rk_force ? rk_sh : ss), 1'b1 };
 
 endmodule
