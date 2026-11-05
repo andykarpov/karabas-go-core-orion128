@@ -5,6 +5,8 @@
 #   make go|mini|minig   one board: synthesis, implementation, bitstream, .kg file
 #   make minig-xst       one step: <board>-xst (.ngc), <board>-impl (.bin), <board>-core (.kg)
 #   make minig-report    LUTs, slices, block RAMs and the timing result of the last build
+#   make orion-xst       the machine alone (orion.prj, -iobuf NO): the fit check of docs/PLAN.md Ф0
+#   make orion-report    its utilization from the .syr
 #   make clean           the intermediate files (not the .bin / .kg files, they are in git)
 #
 # Inputs per board: karabas_<board>.prj (the source list, the shared modules as
@@ -36,6 +38,8 @@ PAR = -ol high -xe c -mt 4
 # included or read by the sources, not in the prj
 INCLUDES = $(wildcard ../modules/rtl/mcu/*.vh)
 
+
+.PHONY: all clean $(BOARDS) $(BOARDS:=-xst) $(BOARDS:=-impl) $(BOARDS:=-core) $(BOARDS:=-report) orion-xst orion-report
 
 all: $(BOARDS)
 
@@ -73,9 +77,19 @@ $(foreach b,$(BOARDS),$(eval $(call board,$(b))))
 
 
 
+orion.ngc: orion.prj orion.xst $(call prj_src,orion.prj) $(INCLUDES)
+	mkdir -p xst/projnav.tmp
+	$(XIL) xst -intstyle ise -ifn orion.xst -ofn orion.syr
+
+orion-xst: orion.ngc
+orion-report:
+	@sed -n '/Device utilization summary/,/Partition Resource Summary/p' orion.syr | grep -E "Number of (Slice Registers|Slice LUTs|Block RAM/FIFO|DSP48)"
+	@grep -E "Minimum period|Maximum Frequency|latch" orion.syr | sort -u | head
+
 clean:
 	rm -f kg_*.stamp
 	rm -rf xst _ngo _xmsgs xlnx_auto_0_xdb iseconfig
 	rm -f $(foreach b,$(BOARDS),$(addprefix karabas_$(b),.ngc .ngd .ngr .syr .lso .bld .pcf .ncd _map.ncd _map.ngm \
 		_map.map _map.mrp _map.xrpt .par .pad _pad.csv _pad.txt .twr .twx .unroutes .xpi .ptwx .bgn .bit .drc \
 		_bitgen.xwbt _summary.xml _usage.xml _xst.xrpt _ngdbuild.xrpt _par.xrpt _guide.ncd))
+	rm -f orion.ngc orion.ngr orion.syr orion.lso orion_xst.xrpt
