@@ -1,7 +1,7 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110502",
+    "build": "26110503",
     "visible": true,
     "type": "osd",
     "order": 13,
@@ -17,8 +17,14 @@
     },
     "osd": [
     {"type": "FL", "name": "ROM disk", "slot": 0, "extensions": ".bin,.rom", "dir": "/orion", "hotkey": "Menu+F1"},
+    {"type": "FL", "name": "ORDOS file", "slot": 1, "extensions": ".ord,.bru", "dir": "/orion", "hotkey": "Menu+F2"},
+    {"type": "FL", "name": "RKO file", "slot": 3, "extensions": ".rko", "dir": "/orion", "hotkey": "Menu+F3"},
+    {"type": "FL", "name": "Monitor", "slot": 2, "extensions": ".bin,.rom", "dir": "/orion", "hotkey": "Menu+F4"},
     {"type": "-"},
     {"type": "S", "name": "CPU", "options": ["KR580VM80A", "Z80"], "default": 0, "hotkey": "Menu+C"},
+    {"type": "S", "name": "Z80 speed", "options": ["2.5 MHz", "5 MHz", "10 MHz"], "default": 0, "hotkey": "Menu+S", "enable_if": {"item": "CPU", "value": "Z80"}},
+    {"type": "S", "name": "RAM", "options": ["256 KB", "512 KB", "1 MB"], "default": 1},
+    {"type": "S", "name": "Keyboard", "options": ["RK-86", "MS7007"], "default": 0, "hotkey": "Menu+K"},
     {"type": "-"},
     {"type": "T", "name": "Reset", "hotkey": "F12"}
     ]

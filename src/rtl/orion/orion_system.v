@@ -8,10 +8,10 @@
  docs/HARDWARE.md has the map.
 
  SRAM (a byte address of 22 bits, orion_sram):
-   000000  RAM: a page of 64 KB is {page[5:1], a[15:0], page[0]}, so pages 0 and 1 are the two
+   000000  RAM, 1 MB: a page of 64 KB is {page[3:1], a[15:0], page[0]}, so pages 0 and 1 are the two
            byte lanes of one address (the video reads pixel and colour in one access)
-   100000  ROM disk (64 KB here; the roms of core.json or the FL item), read through port A of the
-           PPI at F500
+   100000  ROM disk, 1 MB (the roms of core.json or an FL item), read through port A of the PPI at
+           F500, 16 pages of 64 KB by port FE
    200000  Monitor (2 KB)
  The ROMs arrive by the ROM loader of the mcu: rom_addr is that byte address, the machine is in
  reset while rom_active.
@@ -24,6 +24,9 @@ module orion_system (
 	input wire clk,
 	input wire reset,
 	input wire cpu_z80,          // a change is a short reset
+	input wire [1:0] cpu_speed,  // the Z80: 0 2.5, 1 5, 2 10 MHz
+	input wire [1:0] ram_size,   // 0 256, 1 512 KB, 2 1 MB
+	input wire kb_ms7007,        // MS7007 keyboard (else RK-86), change it with a reset
 
 	// the ROM loader of the mcu
 	input wire rom_active,
@@ -31,7 +34,7 @@ module orion_system (
 	input wire [7:0] rom_data,
 	input wire rom_wr,
 
-	// the file loader of the mcu: an FL item with slot 0 is a ROM disk (the machine is in reset)
+	// the file loader of the mcu, orion_loader; the machine is in reset meanwhile
 	input wire file_active,
 	input wire [7:0] file_slot,
 	input wire [31:0] file_addr,
@@ -65,18 +68,21 @@ always @(posedge clk) begin
 	end
 end
 
-wire file_rd = file_active && file_slot == 8'd0;
-wire run_reset = reset | rom_active | file_rd | (sw_cnt != 8'd0);
+wire run_reset = reset | rom_active | file_active | (sw_cnt != 8'd0);
 
 wire [15:0] a;
 wire [7:0] cpu_do;
 reg [7:0] cpu_di;
-wire mem_rd, mem_wr, io_rd, io_wr, inte;
+wire mem_rd, mem_wr, io_rd, io_wr, inte, inta;
+wire rd_ok;
+wire int_n;
 
 orion_cpu cpu (
 	.clk(clk),
 	.reset(run_reset),
 	.cpu_z80(z80),
+	.speed(cpu_speed),
+	.rd_ok(rd_ok),
 	.addr(a),
 	.dout(cpu_do),
 	.din(cpu_di),
@@ -84,15 +90,15 @@ orion_cpu cpu (
 	.mem_wr(mem_wr),
 	.io_rd(io_rd),
 	.io_wr(io_wr),
-	.int_n(1'b1),
+	.int_n(int_n),
+	.inta(inta),
 	.inte(inte)
 );
 
-assign beep = inte;
-
 // ------------------------------------------------------------------ decoding
-wire top_f800 = a[15:11] == 5'b11111;
-wire sel_dev = a[15:10] == 6'b111101;         // F400-F7FF, a memory access
+wire full = z80 & fb[5];                       // Z80 Card: all of 0000-FFFF is RAM
+wire top_f800 = !full && a[15:11] == 5'b11111;
+wire sel_dev = !full && a[15:10] == 6'b111101; // F400-F7FF, a memory access
 wire sel_f4 = sel_dev && a[9:8] == 2'd0;
 wire sel_f5 = sel_dev && a[9:8] == 2'd1;
 wire sel_f6 = sel_dev && a[9:8] == 2'd2;
@@ -104,25 +110,62 @@ always @(posedge clk)
 wire wr_p = wr_any & ~wr_d;   // one clock at the start of a write
 
 // the latches: writes to F8xx.. or the ports F8.. of the Z80
-wire lat_f8 = (mem_wr && a[15:8] == 8'hF8) || (io_wr && a[7:0] == 8'hF8);
-wire lat_f9 = (mem_wr && a[15:8] == 8'hF9) || (io_wr && a[7:0] == 8'hF9);
-wire lat_fa = (mem_wr && a[15:8] == 8'hFA) || (io_wr && a[7:0] == 8'hFA);
+wire mw = mem_wr && !full;
+wire lat_f8 = (mw && a[15:8] == 8'hF8) || (io_wr && a[7:0] == 8'hF8);
+wire lat_f9 = (mw && a[15:8] == 8'hF9) || (io_wr && a[7:0] == 8'hF9);
+wire lat_fa = (mw && a[15:8] == 8'hFA) || (io_wr && a[7:0] == 8'hFA);
+wire lat_fb = z80 && ((mw && a[15:8] == 8'hFB) || (io_wr && a[7:0] == 8'hFB));
+wire lat_fc = z80 && ((mw && a[15:8] == 8'hFC) || (io_wr && a[7:0] == 8'hFC));
+wire lat_fe = z80 && io_wr && a[7:0] == 8'hFE;
+wire lat_ff = z80 && io_wr && a[7:0] == 8'hFF;
 
-reg [3:0] vmode = 4'd0;       // port F8
-reg [1:0] vpage = 2'd0;       // port FA (D1..0), as written
-reg [1:0] mbank = 2'd0;       // port F9: 4 pages, 256 KB
+reg [7:0] vmode = 8'd0;       // port F8: D3..0 the mode, D7 screen of 480 points
+reg [7:0] pfa = 8'd0;         // port FA: D1..0 the screen, D7 screen of 512 points
+reg [3:0] mbank = 4'd0;       // port F9: the page of 64 KB
+reg [7:0] pfc = 8'd0;         // port FC: the colours of the pseudocolour mode
+reg [4:0] pfe = 5'd0;         // port FE: D3..0 the page of the ROM disk, D4 sound
+reg snd_ff = 1'b0;            // toggled by a write to port FF
+// port FB, Z80 Card II: D7 = 0 the dispatcher: 0000-3FFF is the segment D1..0 of page D3..2;
+// D6 interrupts, D5 all RAM
+reg [7:0] fb = 8'h80;
+
 always @(posedge clk) begin
 	if (run_reset) begin
-		vmode <= 4'd0;
-		vpage <= 2'd0;
-		mbank <= 2'd0;
+		vmode <= 8'd0;
+		pfa <= 8'd0;
+		mbank <= 4'd0;
+		pfc <= 8'd0;
+		pfe <= 5'd0;
+		snd_ff <= 1'b0;
+		fb <= 8'h80;
 	end
 	else if (wr_p) begin
-		if (lat_f8) vmode <= cpu_do[3:0];
-		if (lat_f9) mbank <= cpu_do[1:0];
-		if (lat_fa) vpage <= cpu_do[1:0];
+		if (lat_f8) vmode <= cpu_do;
+		if (lat_f9) mbank <= cpu_do[3:0];
+		if (lat_fa) pfa <= cpu_do;
+		if (lat_fb) fb <= cpu_do;
+		if (lat_fc) pfc <= cpu_do;
+		if (lat_fe) pfe <= cpu_do[4:0];
+		if (lat_ff) snd_ff <= ~snd_ff;
 	end
 end
+
+assign beep = z80 ? (pfe[4] ^ snd_ff) : inte;
+
+// the interrupt of the Z80 Card: 50 Hz, the line is held until the Z80 takes it or 64 states of
+// 2.5 MHz later
+reg [19:0] tick = 20'd0;
+reg [10:0] int_hold = 11'd0;
+always @(posedge clk) begin
+	tick <= (tick == 20'd799999) ? 20'd0 : tick + 20'd1;
+	if (run_reset || inta || !fb[6])
+		int_hold <= 11'd0;
+	else if (tick == 20'd0)
+		int_hold <= 11'd1024;
+	else if (int_hold != 11'd0)
+		int_hold <= int_hold - 11'd1;
+end
+assign int_n = !(z80 && int_hold != 11'd0);
 
 // the Monitor everywhere after reset
 reg ipl = 1'b1;
@@ -140,7 +183,7 @@ wire [7:0] kb_scan, kb_ret;
 wire [3:0] kb_pc;
 
 orion_kbd kbd (
-	.clk(clk), .reset(run_reset), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
+	.clk(clk), .reset(run_reset), .ms7007(kb_ms7007), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
 	.scan(kb_scan), .ret(kb_ret), .pc_hi(kb_pc)
 );
 
@@ -165,14 +208,19 @@ orion_ppi ppi_usr (
 );
 
 // ------------------------------------------------------------------ the memory
-wire [1:0] page = (a[15:12] == 4'hF) ? 2'd0 : mbank;   // F000-F3FF: always page 0
-wire [21:0] ram_addr = { 4'd0, page[1], a, page[0] };
+wire disp = z80 && !fb[7] && a[15:14] == 2'b00;
+wire [1:0] page_mask_hi = ram_size == 2'd0 ? 2'b00 : ram_size == 2'd1 ? 2'b01 : 2'b11;
+wire [3:0] bank = mbank & { page_mask_hi, 2'b11 };
+wire [3:0] page = disp ? { 2'b00, fb[3:2] } :
+                  (!full && a[15:12] == 4'hF) ? 4'd0 : bank;  // F000-F3FF: always page 0
+wire [15:0] ram_a = disp ? { fb[1:0], a[13:0] } : a;
+wire [21:0] ram_addr = { 2'd0, page[3:1], ram_a, page[0] };
 
-wire sel_rom = !mem_wr && (ipl || top_f800);
+wire sel_rom = !mem_wr && !full && (ipl || top_f800);
 wire sel_rd = sel_f5 && a[1:0] == 2'd0;
 
 wire [21:0] sram_addr = sel_rom ? { 11'b10000000000, a[10:0] } :
-                        sel_rd  ? { 6'b010000, rd_pc, rd_pb } :
+                        sel_rd  ? { 2'b01, pfe[3:0], rd_pc, rd_pb } :
                         ram_addr;
 wire sram_we = mem_wr && !sel_dev && !top_f800;
 
@@ -185,28 +233,33 @@ always @* begin
 		else if (sel_f6) cpu_di = ppi6_do;
 		else if (!sel_dev) cpu_di = sram_do;
 	end
+	else if (io_rd && a[7:0] == 8'hFB)
+		cpu_di = fb;
 end
 
-// the ROM loader and the file loader: a byte waits for its slot, the mcu writes one in ten clocks
-// or less often
-reg aux_req = 1'b0;
-reg [21:0] aux_addr = 22'd0;
-reg [7:0] aux_din = 8'd0;
-wire aux_ack;
-always @(posedge clk) begin
-	if (rom_wr) begin
-		aux_req <= 1'b1;
-		aux_addr <= rom_addr;
-		aux_din <= rom_data;
-	end
-	else if (file_wr && file_rd) begin
-		aux_req <= 1'b1;
-		aux_addr <= { 2'b01, file_addr[19:0] };
-		aux_din <= file_data;
-	end
-	else if (aux_ack)
-		aux_req <= 1'b0;
-end
+wire aux_req, aux_we, aux_ack;
+wire [21:0] aux_addr;
+wire [7:0] aux_din, aux_dout;
+
+orion_loader loader (
+	.clk(clk),
+	.rom_active(rom_active),
+	.rom_addr(rom_addr),
+	.rom_data(rom_data),
+	.rom_wr(rom_wr),
+	.file_active(file_active),
+	.file_slot(file_slot),
+	.file_addr(file_addr),
+	.file_data(file_data),
+	.file_wr(file_wr),
+	.tick(tick == 20'd0),
+	.aux_req(aux_req),
+	.aux_we(aux_we),
+	.aux_addr(aux_addr),
+	.aux_din(aux_din),
+	.aux_ack(aux_ack),
+	.aux_dout(aux_dout)
+);
 
 wire vid_req, vid_valid;
 wire [20:0] vid_addr;
@@ -214,8 +267,11 @@ wire [15:0] vid_dout;
 
 orion_video video (
 	.clk(clk),
-	.vmode(vmode[2:0]),
-	.vpage(vpage),
+	.vmode(vmode[3:0]),
+	.vpage(pfa[1:0]),
+	.w512(pfa[7]),
+	.w480(vmode[7]),
+	.pcolor(pfc),
 	.vid_req(vid_req),
 	.vid_addr(vid_addr),
 	.vid_dout(vid_dout),
@@ -232,12 +288,13 @@ orion_sram sram (
 	.we(sram_we),
 	.din(cpu_do),
 	.dout(sram_do),
+	.rd_ok(rd_ok),
 	.aux_req(aux_req),
-	.aux_we(1'b1),
+	.aux_we(aux_we),
 	.aux_addr(aux_addr),
 	.aux_din(aux_din),
 	.aux_ack(aux_ack),
-	.aux_dout(),
+	.aux_dout(aux_dout),
 	.vid_req(vid_req),
 	.vid_addr(vid_addr),
 	.vid_dout(vid_dout),

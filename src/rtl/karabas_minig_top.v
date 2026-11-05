@@ -5,14 +5,16 @@
  Orion-128 core for Karabas Mini rev.G (HDMI, PCM5102). The board glue of core-msx.
 
  The machine is orion_system; all file work goes through the firmware: the ROMs of core.json by the
- ROM loader, a ROM disk by the FL item of the OSD.
+ ROM loader, a ROM disk, a Monitor and ORDOS files by the FL items of the OSD (orion_loader).
 
  Clocks: one PLL, VCO 800 MHz (50 * 16): clk_sys 40.0 MHz (/20: everything, 800 x 600 output),
  clk_8 8.0 MHz (/100, FT_CLK_OUT: the FT812 must always have its clock, see karabas-go-notes
  ft-clk-out-required). HDMI: kg_dcm 5 x clk_sys and its inverse.
 
  Soft switches (the index of the item in the osd of core.json, file items included):
-   0 ROM disk (FL 0)   1 -   2 CPU (KR580VM80A / Z80)   3 -   4 Reset
+   0 ROM disk (FL 0)   1 ORDOS file (FL 1)   2 RKO file (FL 3)   3 Monitor (FL 2)   4 -
+   5 CPU (KR580VM80A / Z80)   6 Z80 speed (2.5 / 5 / 10 MHz)   7 RAM (256 / 512 KB / 1 MB)
+   8 Keyboard (RK-86 / MS7007)   9 -   10 Reset
 */
 
 module karabas_minig_top (
@@ -295,15 +297,18 @@ assign SD_CLK = mcu_sck_ibufg;
 
 // ------------------------------------------------------------------ soft switches
 
-wire [5*8-1:0] sw;
-kg_soft_switches #(.N(5)) soft_switches (
+wire [11*8-1:0] sw;
+kg_soft_switches #(.N(11)) soft_switches (
 	.clk(clk_sys),
 	.command(softsw_command),
 	.regs(sw),
 	.upd()
 );
-wire sw_z80 = sw[2*8];
-wire sw_reset = sw[4*8];
+wire sw_z80 = sw[5*8];
+wire [1:0] sw_speed = sw[6*8 +: 2];
+wire [1:0] sw_ram = sw[7*8 +: 2];
+wire sw_ms7007 = sw[8*8];
+wire sw_reset = sw[10*8];
 
 // ------------------------------------------------------------------ the machine
 
@@ -315,6 +320,9 @@ orion_system orion (
 	.clk(clk_sys),
 	.reset(areset || sw_reset || mcu_busy),
 	.cpu_z80(sw_z80),
+	.cpu_speed(sw_speed),
+	.ram_size(sw_ram),
+	.kb_ms7007(sw_ms7007),
 	.rom_active(rom_active),
 	.rom_addr(rom_addr[21:0]),
 	.rom_data(rom_data),
