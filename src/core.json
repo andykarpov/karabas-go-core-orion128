@@ -1,11 +1,15 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110500",
+    "build": "26110502",
     "visible": true,
     "type": "osd",
+    "order": 13,
     "eeprom_bank": 255,
-    "roms": [],
+    "roms": [
+    {"filename": "roms/romdisk1.bin", "address": 1048576},
+    {"filename": "roms/M2rk.bin", "address": 2097152}
+    ],
     "boards": {
         "go": {"bitstream": "karabas_go.bin"},
         "mini": {"bitstream": "karabas_mini.bin"},
@@ -13,9 +17,8 @@
     },
     "osd": [
     {"type": "FL", "name": "ROM disk", "slot": 0, "extensions": ".bin,.rom", "dir": "/orion", "hotkey": "Menu+F1"},
-    {"type": "FL", "name": "ORDOS file", "slot": 1, "extensions": ".ord,.bru,.rko", "dir": "/orion", "hotkey": "Menu+F2"},
     {"type": "-"},
-    {"type": "S", "name": "Keyboard", "options": ["RK-86", "MS7007"], "default": 0, "hotkey": "Menu+K"},
+    {"type": "S", "name": "CPU", "options": ["KR580VM80A", "Z80"], "default": 0, "hotkey": "Menu+C"},
     {"type": "-"},
     {"type": "T", "name": "Reset", "hotkey": "F12"}
     ]

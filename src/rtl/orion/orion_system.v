@@ -5,13 +5,13 @@
  orion_system.v
 
  The Orion-128: the processor, the memory map, the ports and the SRAM, on one clock of 40 MHz.
- docs/HARDWARE.md has the map. Phase 0: the base machine without video and keyboard, their ports
- (vmode, vpage, kb_*) are here for the next phase.
+ docs/HARDWARE.md has the map.
 
  SRAM (a byte address of 22 bits, orion_sram):
    000000  RAM: a page of 64 KB is {page[5:1], a[15:0], page[0]}, so pages 0 and 1 are the two
            byte lanes of one address (the video reads pixel and colour in one access)
-   100000  ROM disk (64 KB here), read through port A of the PPI at F500
+   100000  ROM disk (64 KB here; the roms of core.json or the FL item), read through port A of the
+           PPI at F500
    200000  Monitor (2 KB)
  The ROMs arrive by the ROM loader of the mcu: rom_addr is that byte address, the machine is in
  reset while rom_active.
@@ -23,7 +23,7 @@
 module orion_system (
 	input wire clk,
 	input wire reset,
-	input wire cpu_z80,          // change it only during reset
+	input wire cpu_z80,          // a change is a short reset
 
 	// the ROM loader of the mcu
 	input wire rom_active,
@@ -31,14 +31,21 @@ module orion_system (
 	input wire [7:0] rom_data,
 	input wire rom_wr,
 
-	// the keyboard PPI at F400
-	output wire [7:0] kb_scan,   // port A
-	input wire [7:0] kb_in,      // port B
-	output wire [3:0] kb_c_o,    // port C, low half
-	input wire [3:0] kb_c_i,     // port C, high half
+	// the file loader of the mcu: an FL item with slot 0 is a ROM disk (the machine is in reset)
+	input wire file_active,
+	input wire [7:0] file_slot,
+	input wire [31:0] file_addr,
+	input wire [7:0] file_data,
+	input wire file_wr,
 
-	output reg [3:0] vmode = 4'd0,  // port F8
-	output reg [1:0] vpage = 2'd0,  // port FA (D1..0), as written
+	input wire [7:0] kb_scancode,
+	input wire kb_scancode_upd,
+
+	output wire [23:0] rgb,
+	output wire hs,
+	output wire vs,
+	output wire de,
+
 	output wire beep,
 
 	output wire [20:0] MA,
@@ -46,7 +53,20 @@ module orion_system (
 	output wire [1:0] MWR_N
 );
 
-wire run_reset = reset | rom_active;
+// a change of the processor resets the machine for 16 states, the new one starts from the Monitor
+reg z80 = 1'b0;
+reg [7:0] sw_cnt = 8'd0;
+always @(posedge clk) begin
+	if (sw_cnt != 8'd0)
+		sw_cnt <= sw_cnt - 8'd1;
+	else if (cpu_z80 != z80) begin
+		z80 <= cpu_z80;
+		sw_cnt <= 8'd255;
+	end
+end
+
+wire file_rd = file_active && file_slot == 8'd0;
+wire run_reset = reset | rom_active | file_rd | (sw_cnt != 8'd0);
 
 wire [15:0] a;
 wire [7:0] cpu_do;
@@ -56,7 +76,7 @@ wire mem_rd, mem_wr, io_rd, io_wr, inte;
 orion_cpu cpu (
 	.clk(clk),
 	.reset(run_reset),
-	.cpu_z80(cpu_z80),
+	.cpu_z80(z80),
 	.addr(a),
 	.dout(cpu_do),
 	.din(cpu_di),
@@ -88,6 +108,8 @@ wire lat_f8 = (mem_wr && a[15:8] == 8'hF8) || (io_wr && a[7:0] == 8'hF8);
 wire lat_f9 = (mem_wr && a[15:8] == 8'hF9) || (io_wr && a[7:0] == 8'hF9);
 wire lat_fa = (mem_wr && a[15:8] == 8'hFA) || (io_wr && a[7:0] == 8'hFA);
 
+reg [3:0] vmode = 4'd0;       // port F8
+reg [1:0] vpage = 2'd0;       // port FA (D1..0), as written
 reg [1:0] mbank = 2'd0;       // port F9: 4 pages, 256 KB
 always @(posedge clk) begin
 	if (run_reset) begin
@@ -112,15 +134,21 @@ always @(posedge clk)
 
 // ------------------------------------------------------------------ the PPIs
 wire [7:0] ppi4_do, ppi5_do, ppi6_do;
-wire [7:0] rd_pb, rd_pc, kb_pc;
+wire [7:0] rd_pb, rd_pc;
 wire [7:0] sram_do;
+wire [7:0] kb_scan, kb_ret;
+wire [3:0] kb_pc;
+
+orion_kbd kbd (
+	.clk(clk), .reset(run_reset), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
+	.scan(kb_scan), .ret(kb_ret), .pc_hi(kb_pc)
+);
 
 orion_ppi ppi_kbd (
 	.clk(clk), .reset(run_reset), .a(a[1:0]), .wr(wr_p & mem_wr & sel_f4), .din(cpu_do), .dout(ppi4_do),
-	.pa_i(8'hFF), .pb_i(kb_in), .pc_i({kb_c_i, 4'hF}),
-	.pa_o(kb_scan), .pb_o(), .pc_o(kb_pc)
+	.pa_i(8'hFF), .pb_i(kb_ret), .pc_i({kb_pc, 4'hF}),
+	.pa_o(kb_scan), .pb_o(), .pc_o()
 );
-assign kb_c_o = kb_pc[3:0];
 
 // the ROM disk: B and C are the address, A the byte
 orion_ppi ppi_rd (
@@ -159,7 +187,8 @@ always @* begin
 	end
 end
 
-// the ROM loader: a byte waits for its slot, the mcu writes one in ten clocks or less often
+// the ROM loader and the file loader: a byte waits for its slot, the mcu writes one in ten clocks
+// or less often
 reg aux_req = 1'b0;
 reg [21:0] aux_addr = 22'd0;
 reg [7:0] aux_din = 8'd0;
@@ -170,9 +199,32 @@ always @(posedge clk) begin
 		aux_addr <= rom_addr;
 		aux_din <= rom_data;
 	end
+	else if (file_wr && file_rd) begin
+		aux_req <= 1'b1;
+		aux_addr <= { 2'b01, file_addr[19:0] };
+		aux_din <= file_data;
+	end
 	else if (aux_ack)
 		aux_req <= 1'b0;
 end
+
+wire vid_req, vid_valid;
+wire [20:0] vid_addr;
+wire [15:0] vid_dout;
+
+orion_video video (
+	.clk(clk),
+	.vmode(vmode[2:0]),
+	.vpage(vpage),
+	.vid_req(vid_req),
+	.vid_addr(vid_addr),
+	.vid_dout(vid_dout),
+	.vid_valid(vid_valid),
+	.rgb(rgb),
+	.hs(hs),
+	.vs(vs),
+	.de(de)
+);
 
 orion_sram sram (
 	.clk(clk),
@@ -186,6 +238,10 @@ orion_sram sram (
 	.aux_din(aux_din),
 	.aux_ack(aux_ack),
 	.aux_dout(),
+	.vid_req(vid_req),
+	.vid_addr(vid_addr),
+	.vid_dout(vid_dout),
+	.vid_valid(vid_valid),
 	.MA(MA),
 	.MD(MD),
 	.MWR_N(MWR_N)

@@ -2,7 +2,7 @@
 `default_nettype wire
 
 /*
- orion_sram.v (msx_sram.v of karabas-go-core-msx; a port of the video comes in phase 1)
+ orion_sram.v (msx_sram.v of karabas-go-core-msx, with the port of the video)
 
  The SRAM of the board (two byte lanes of 2M x 8, 10 ns, asynchronous) as one byte port of the
  machine: a byte address of 22 bits (MA = addr[21:1], the lane by addr[0]: MWR_N[0] / MD[7:0] for
@@ -29,6 +29,10 @@
  between the machine and the aux port; a slot of the aux port without a request is the
  machine's. With requests all the time, the machine has every other slot: its reads take up to
  nine clocks, under a T-state of the Z80 (12); a request of the aux port takes four to six.
+
+ The video port: a pulse of vid_req with vid_addr (a word address, one per 16 clocks at most) takes
+ the next slot before everything else. vid_valid is a clock with the 16 bits in vid_dout, 6 clocks
+ after the request at the latest.
 */
 
 module orion_sram (
@@ -45,6 +49,11 @@ module orion_sram (
 	input wire [7:0] aux_din,
 	output reg aux_ack = 1'b0,
 	output reg [7:0] aux_dout = 8'hFF,
+
+	input wire vid_req,
+	input wire [20:0] vid_addr,
+	output reg [15:0] vid_dout = 16'd0,
+	output reg vid_valid = 1'b0,
 
 	output reg [20:0] MA = 21'd0,
 	inout wire [15:0] MD,
@@ -67,6 +76,9 @@ reg s_aux = 1'b0;    // the slot is the aux port's
 reg q_aux = 1'b0;
 reg aux_turn = 1'b0; // the next slot may go to the aux port
 reg aux_busy = 1'b0; // an aux request is in a slot, not acked yet
+reg vid_pend = 1'b0;
+reg s_vid = 1'b0;    // the slot is the video's
+reg q_vid = 1'b0;
 
 // the port of the machine through a register: its address is the end of a long path (the T80,
 // the address decoding, 11 levels of logic in core-msx) and took the clock alone
@@ -94,9 +106,17 @@ always @(posedge clk) begin
 		aux_busy <= 1'b0;
 	aux_ack <= 1'b0;
 
+	if (vid_req)
+		vid_pend <= 1'b1;
+
 	// the byte of the read slot before, one clock after its MD was taken
+	vid_valid <= 1'b0;
 	if (q_valid) begin
-		if (q_aux) begin
+		if (q_vid) begin
+			vid_dout <= md_q;
+			vid_valid <= 1'b1;
+		end
+		else if (q_aux) begin
 			aux_dout <= q_lane ? md_q[15:8] : md_q[7:0];
 			aux_ack <= 1'b1;
 		end
@@ -111,11 +131,21 @@ always @(posedge clk) begin
 		q_valid <= s_read;
 		q_lane <= s_lane;
 		q_aux <= s_aux;
+		q_vid <= s_vid;
+		s_vid <= 1'b0;
 		if (s_aux && s_we)
 			aux_ack <= 1'b1;   // an aux write ends with its slot
 		aux_turn <= ~aux_turn;
 		s_aux <= 1'b0;
-		if (aux_turn && aux_req && !aux_busy) begin
+		if (vid_pend) begin
+			MA <= vid_addr;
+			s_lane <= 1'b0;
+			s_we <= 1'b0;
+			s_read <= 1'b1;
+			s_vid <= 1'b1;
+			vid_pend <= 1'b0;
+		end
+		else if (aux_turn && aux_req && !aux_busy) begin
 			MA <= aux_addr[21:1];
 			s_lane <= aux_addr[0];
 			s_we <= aux_we;
