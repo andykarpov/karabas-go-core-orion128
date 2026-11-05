@@ -1,7 +1,7 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110503",
+    "build": "26110505",
     "visible": true,
     "type": "osd",
     "order": 13,
@@ -16,6 +16,8 @@
         "minig": {"bitstream": "karabas_minig.bin"}
     },
     "osd": [
+    {"type": "F", "name": "Disk A", "slot": 4, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F5"},
+    {"type": "F", "name": "Disk B", "slot": 5, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F6"},
     {"type": "FL", "name": "ROM disk", "slot": 0, "extensions": ".bin,.rom", "dir": "/orion", "hotkey": "Menu+F1"},
     {"type": "FL", "name": "ORDOS file", "slot": 1, "extensions": ".ord,.bru", "dir": "/orion", "hotkey": "Menu+F2"},
     {"type": "FL", "name": "RKO file", "slot": 3, "extensions": ".rko", "dir": "/orion", "hotkey": "Menu+F3"},

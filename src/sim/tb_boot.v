@@ -14,6 +14,17 @@ module tb_boot (
 	input wire [31:0] file_addr,
 	input wire [7:0] file_data,
 	input wire file_wr,
+	input wire [7:0] img_mounted,
+	input wire [63:0] img_size,
+	input wire img_data_wr,
+	input wire [8:0] img_data_addr,
+	input wire [7:0] img_data,
+	input wire img_result_wr,
+	input wire [7:0] img_result,
+	input wire [15:0] img_sum,
+	output wire img_q_wr,
+	output wire [23:0] img_q_di,
+	input wire img_q_ack,
 	input wire rom_active,
 	input wire [21:0] rom_addr,
 	input wire [7:0] rom_data,
@@ -37,6 +48,9 @@ orion_system sys (
 	.clk(clk), .reset(reset), .cpu_z80(cpu_z80), .cpu_speed(cpu_speed), .ram_size(ram_size), .kb_ms7007(kb_ms7007),
 	.rom_active(rom_active), .rom_addr(rom_addr), .rom_data(rom_data), .rom_wr(rom_wr),
 	.file_active(file_active), .file_slot(file_slot), .file_addr(file_addr), .file_data(file_data), .file_wr(file_wr),
+	.img_mounted(img_mounted), .img_size(img_size), .img_wp(8'd0), .img_data_wr(img_data_wr),
+	.img_data_addr(img_data_addr), .img_data(img_data), .img_result_wr(img_result_wr), .img_result(img_result),
+	.img_sum(img_sum), .img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd),
 	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
@@ -51,5 +65,12 @@ always @(posedge clk) begin
 	if (!MWR_N[0]) lo[MA] <= MD[7:0];
 	if (!MWR_N[1]) hi[MA] <= MD[15:8];
 end
+
+// +fdc: the writes to the floppy controller and the first reads of each kind
+reg fdc_log = 1'b0;
+initial fdc_log = $test$plusargs("fdc");
+always @(posedge clk)
+	if (fdc_log && sys.wr_p && sys.mem_wr && (sys.sel_fdc || sys.sel_rgu))
+		$display("fdc wr %04x = %02x", sys.a, sys.cpu_do);
 
 endmodule

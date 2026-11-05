@@ -13,6 +13,7 @@
    100000  ROM disk, 1 MB (the roms of core.json or an FL item), read through port A of the PPI at
            F500, 16 pages of 64 KB by port FE
    200000  Monitor (2 KB)
+   240000  the disk images A and B (orion_fdd_cache), 820 KB each
  The ROMs arrive by the ROM loader of the mcu: rom_addr is that byte address, the machine is in
  reset while rom_active.
 
@@ -40,6 +41,20 @@ module orion_system (
 	input wire [31:0] file_addr,
 	input wire [7:0] file_data,
 	input wire file_wr,
+
+	// the file mounter of the mcu: the disks A and B are its slots 4 and 5
+	input wire [7:0] img_mounted,
+	input wire [63:0] img_size,
+	input wire [7:0] img_wp,
+	input wire img_data_wr,
+	input wire [8:0] img_data_addr,
+	input wire [7:0] img_data,
+	input wire img_result_wr,
+	input wire [7:0] img_result,
+	input wire [15:0] img_sum,
+	output wire img_q_wr,
+	output wire [23:0] img_q_di,
+	input wire img_q_ack,
 
 	input wire [7:0] kb_scancode,
 	input wire kb_scancode_upd,
@@ -102,6 +117,11 @@ wire sel_dev = !full && a[15:10] == 6'b111101; // F400-F7FF, a memory access
 wire sel_f4 = sel_dev && a[9:8] == 2'd0;
 wire sel_f5 = sel_dev && a[9:8] == 2'd1;
 wire sel_f6 = sel_dev && a[9:8] == 2'd2;
+wire sel_f7 = sel_dev && a[9:8] == 2'd3;
+wire sel_fdc, sel_rgu, fdc_drq;
+wire [7:0] fdc_do;
+wire [7:0] sdc_img_mounted;
+wire [63:0] sdc_img_size;
 
 wire wr_any = mem_wr | io_wr;
 reg wr_d = 1'b0;
@@ -231,15 +251,213 @@ always @* begin
 		else if (sel_f4) cpu_di = ppi4_do;
 		else if (sel_f5) cpu_di = ppi5_do;
 		else if (sel_f6) cpu_di = ppi6_do;
+		else if (sel_fdc) cpu_di = fdc_do;
+		else if (sel_rgu) cpu_di = { 6'd0, fdc_drq, 1'b0 };
 		else if (!sel_dev) cpu_di = sram_do;
 	end
 	else if (io_rd && a[7:0] == 8'hFB)
 		cpu_di = fb;
 end
 
+// ------------------------------------------------------------------ the disk drive
+// KR1818VG93 at F700-F703, F710-F713 (an incomplete decoder), the control register at F704, F714,
+// F720: D0 the drive, D4 the side, inverted. Read, the control register shows DRQ in D1.
+assign sel_fdc = sel_f7 && a[7:5] == 3'd0 && a[3:2] == 2'd0;
+assign sel_rgu = sel_f7 && (a[7:0] == 8'h20 || (a[7:5] == 3'd0 && a[3:0] == 4'd4));
+
+reg [7:0] rgu = 8'd0;
+always @(posedge clk)
+	if (run_reset)
+		rgu <= 8'd0;
+	else if (wr_p && mem_wr && sel_rgu)
+		rgu <= cpu_do;
+
+// 5 MHz: a read of the Z80 at 10 MHz lasts 250 ns
+reg [2:0] fdc_div = 3'd0;
+always @(posedge clk)
+	fdc_div <= fdc_div + 3'd1;
+
+wire drive = rgu[0];
+reg disk_a = 1'b0, disk_b = 1'b0;
+always @(posedge clk) begin
+	if (sdc_img_mounted[4]) disk_a <= |sdc_img_size[31:0];
+	if (sdc_img_mounted[5]) disk_b <= |sdc_img_size[31:0];
+end
+
+wire [31:0] sd_lba;
+wire sd_rd, sd_wr, sd_ack_a, sd_ack_b, sd_wr_a, sd_wr_b;
+wire [8:0] sd_addr_a, sd_addr_b;
+wire [7:0] sd_do_a, sd_do_b, sd_buff_din;
+
+wd1793 #(.RWMODE(1), .EDSK(0)) fdc (
+	.clk_sys(clk),
+	.ce(fdc_div == 3'd0),
+	.reset(run_reset),
+	.io_en(sel_fdc),
+	.rd(mem_rd),
+	.wr(mem_wr),
+	.addr(a[1:0]),
+	.din(cpu_do),
+	.dout(fdc_do),
+	.drq(fdc_drq),
+	.intrq(),
+	.busy(),
+	.wp(drive ? img_wp[5] : img_wp[4]),
+	.size_code(3'd3),         // 5 sectors of 1024 bytes
+	.layout(1'b0),            // track, side, sector
+	.side(~rgu[4]),
+	.ready(drive ? disk_b : disk_a),
+	.img_mounted(sdc_img_mounted[4] | sdc_img_mounted[5]),
+	.img_size(sdc_img_size[19:0]),
+	.prepare(),
+	.sd_lba(sd_lba),
+	.sd_rd(sd_rd),
+	.sd_wr(sd_wr),
+	.sd_ack(sd_ack_a | sd_ack_b),
+	.sd_buff_addr(drive ? sd_addr_b : sd_addr_a),
+	.sd_buff_dout(drive ? sd_do_b : sd_do_a),
+	.sd_buff_din(sd_buff_din),
+	.sd_buff_wr(sd_wr_a | sd_wr_b),
+	.input_active(1'b0),
+	.input_addr(20'd0),
+	.input_data(8'd0),
+	.input_wr(1'b0),
+	.buff_addr(),
+	.buff_read(),
+	.buff_din(8'd0)
+);
+
 wire aux_req, aux_we, aux_ack;
 wire [21:0] aux_addr;
 wire [7:0] aux_din, aux_dout;
+
+wire [7:0] sdc_byte_out_a, sdc_byte_out_b;
+wire [31:0] sdc_sector_a, sdc_sector_b;
+wire sdc_rd_a, sdc_wr_a, sdc_rd_b, sdc_wr_b;
+wire sdc_busy, sdc_done, sdc_error, sdc_in_strobe;
+wire [2:0] sdc_slot;
+wire [8:0] sdc_byte_addr;
+wire [7:0] sdc_in_data;
+
+// no reset: a reset of the machine during a request leaves img_sdc to finish it
+img_sdc #(
+	.OUT_LATENCY(3),
+	.TIMEOUT(24'd8000000)     // 200 ms at 40 MHz
+) sdc (
+	.clk(clk),
+	.reset(1'b0),
+	.img_mounted(img_mounted),
+	.img_size(img_size),
+	.img_data_wr(img_data_wr),
+	.img_data_addr(img_data_addr),
+	.img_data(img_data),
+	.img_result_wr(img_result_wr),
+	.img_result(img_result),
+	.img_sum(img_sum),
+	.img_q_wr(img_q_wr),
+	.img_q_di(img_q_di),
+	.img_q_ack(img_q_ack),
+	.sdc_img_mounted(sdc_img_mounted),
+	.sdc_img_size(sdc_img_size),
+	.sdc_rd({ 2'd0, sdc_rd_b, sdc_rd_a, 4'd0 }),
+	.sdc_wr({ 2'd0, sdc_wr_b, sdc_wr_a, 4'd0 }),
+	.sdc_sector((sdc_rd_a || sdc_wr_a) ? sdc_sector_a : sdc_sector_b),
+	.sdc_busy(sdc_busy),
+	.sdc_done(sdc_done),
+	.sdc_error(sdc_error),
+	.sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_in_strobe),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_in_data),
+	.sdc_byte_out_data(sdc_slot == 3'd5 ? sdc_byte_out_b : sdc_byte_out_a),
+	.active()
+);
+
+wire fd_req_a, fd_we_a, fd_req_b, fd_we_b, ld_req, ld_we;
+wire [21:0] fd_addr_a, fd_addr_b, ld_addr;
+wire [7:0] fd_din_a, fd_din_b, ld_din;
+reg [1:0] own = 2'd0;         // the aux port: 1 loader, 2 disk A, 3 disk B
+wire loading = rom_active | file_active;
+
+orion_fdd_cache #(.BASE(22'h240000), .SLOT(3'd4)) cache_a (
+	.clk(clk),
+	.img_mounted(sdc_img_mounted[4]),
+	.img_size(sdc_img_size[31:0]),
+	.sd_rd(sd_rd & ~drive),
+	.sd_wr(sd_wr & ~drive),
+	.sd_lba(sd_lba),
+	.sd_ack(sd_ack_a),
+	.sd_buff_addr(sd_addr_a),
+	.sd_buff_dout(sd_do_a),
+	.sd_buff_wr(sd_wr_a),
+	.sd_buff_din(sd_buff_din),
+	.sdc_rd(sdc_rd_a),
+	.sdc_wr(sdc_wr_a),
+	.sdc_sector(sdc_sector_a),
+	.sdc_busy(sdc_busy),
+	.sdc_done(sdc_done),
+	.sdc_error(sdc_error),
+	.sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_in_strobe),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_in_data),
+	.sdc_byte_out_data(sdc_byte_out_a),
+	.pause(loading),
+	.aux_req(fd_req_a),
+	.aux_we(fd_we_a),
+	.aux_addr(fd_addr_a),
+	.aux_din(fd_din_a),
+	.aux_ack(aux_ack && own == 2'd2),
+	.aux_dout(aux_dout),
+	.filling(),
+	.filled()
+);
+
+orion_fdd_cache #(.BASE(22'h30D000), .SLOT(3'd5)) cache_b (
+	.clk(clk),
+	.img_mounted(sdc_img_mounted[5]),
+	.img_size(sdc_img_size[31:0]),
+	.sd_rd(sd_rd & drive),
+	.sd_wr(sd_wr & drive),
+	.sd_lba(sd_lba),
+	.sd_ack(sd_ack_b),
+	.sd_buff_addr(sd_addr_b),
+	.sd_buff_dout(sd_do_b),
+	.sd_buff_wr(sd_wr_b),
+	.sd_buff_din(sd_buff_din),
+	.sdc_rd(sdc_rd_b),
+	.sdc_wr(sdc_wr_b),
+	.sdc_sector(sdc_sector_b),
+	.sdc_busy(sdc_busy),
+	.sdc_done(sdc_done),
+	.sdc_error(sdc_error),
+	.sdc_slot(sdc_slot),
+	.sdc_byte_in_strobe(sdc_in_strobe),
+	.sdc_byte_addr(sdc_byte_addr),
+	.sdc_byte_in_data(sdc_in_data),
+	.sdc_byte_out_data(sdc_byte_out_b),
+	.pause(loading),
+	.aux_req(fd_req_b),
+	.aux_we(fd_we_b),
+	.aux_addr(fd_addr_b),
+	.aux_din(fd_din_b),
+	.aux_ack(aux_ack && own == 2'd3),
+	.aux_dout(aux_dout),
+	.filling(),
+	.filled()
+);
+
+// a master holds its request until the ack and drops it at that edge
+always @(posedge clk) begin
+	if (aux_ack)
+		own <= 2'd0;
+	else if (own == 2'd0)
+		own <= ld_req ? 2'd1 : fd_req_a ? 2'd2 : fd_req_b ? 2'd3 : 2'd0;
+end
+assign aux_req = own == 2'd1 ? ld_req : own == 2'd2 ? fd_req_a : own == 2'd3 ? fd_req_b : 1'b0;
+assign aux_we = own == 2'd1 ? ld_we : own == 2'd2 ? fd_we_a : fd_we_b;
+assign aux_addr = own == 2'd1 ? ld_addr : own == 2'd2 ? fd_addr_a : fd_addr_b;
+assign aux_din = own == 2'd1 ? ld_din : own == 2'd2 ? fd_din_a : fd_din_b;
 
 orion_loader loader (
 	.clk(clk),
@@ -253,11 +471,11 @@ orion_loader loader (
 	.file_data(file_data),
 	.file_wr(file_wr),
 	.tick(tick == 20'd0),
-	.aux_req(aux_req),
-	.aux_we(aux_we),
-	.aux_addr(aux_addr),
-	.aux_din(aux_din),
-	.aux_ack(aux_ack),
+	.aux_req(ld_req),
+	.aux_we(ld_we),
+	.aux_addr(ld_addr),
+	.aux_din(ld_din),
+	.aux_ack(aux_ack && own == 2'd1),
 	.aux_dout(aux_dout)
 );
 
