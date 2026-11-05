@@ -249,6 +249,20 @@ module wd1793 (
 		reg [3:0] scan_state;
 		reg [1:0] scan_cnt;
 		reg [1:0] blk_max;
+		// karabas: Write Track, the upstream command only ended at once. The stream of the track is
+		// parsed: F5.. FE C H R N opens a sector, F5.. FB its data, which go to the image as a write
+		// of sector R of this track (the C and H of the ID are not kept, an image has none). Sectors
+		// of another size or out of the track are dropped. The command ends after WT_LEN bytes, or
+		// when the host stops writing. DRQ waits during a sector write: the hosts poll it.
+		reg wt_on;
+		reg wt_f5;
+		reg wt_id;
+		reg wt_data;
+		reg wt_ok;
+		reg [1:0] wt_idx;
+		reg [7:0] wt_r;
+		reg [7:0] wt_sector;
+		reg [12:0] wt_cnt;
 		if (RWMODE) begin
 			old_mounted <= img_mounted;
 			if (old_mounted && ~img_mounted) begin
@@ -296,6 +310,7 @@ module wd1793 (
 			seektimer <= 'h3ff;
 			{ack, sd_wr, sd_rd, sd_busy} <= 0;
 			ra_sector <= 1;
+			wt_on <= 0;
 		end
 		else if (ce) begin
 			ack <= {ack[4:0], sd_ack};
@@ -461,6 +476,8 @@ module wd1793 (
 						sd_block <= sd_block + 1'd1;
 						if (sd_block < blk_max)
 							state <= 32'd11;
+						else if (wt_on)
+							state <= 32'd24;
 						else if ((format && var_size) && !edsk_next)
 							state <= 32'd19;
 						else if (multisector) begin
@@ -512,8 +529,85 @@ module wd1793 (
 						wait_time <= wait_time - 1;
 					else
 						state <= 32'd19;
+				// karabas: the states of Write Track
+				32'd20: begin
+					watchdog_set <= 1;
+					read_timer <= 15;
+					state <= 32'd21;
+				end
+				32'd21: begin
+					read_timer <= read_timer - 1'b1;
+					if (!read_timer) begin
+						write_data <= 0;
+						watchdog_set <= 0;
+						s_lostdata <= 0;
+						s_drq_busy <= 2'b11;
+						state <= 32'd22;
+					end
+				end
+				32'd22:
+					if (watchdog_bark) begin
+						s_drq_busy <= 2'b01;
+						s_lostdata <= 1;
+						wt_on <= 0;
+						state <= 32'd19;
+					end
+					else if (write_data & s_drq) begin
+						s_drq_busy <= 2'b01;
+						wt_cnt <= wt_cnt + 1'd1;
+						state <= (wt_cnt == 13'd6399 ? 32'd19 : 32'd20);
+						if (wt_cnt == 13'd6399)
+							wt_on <= 0;
+						if (wt_data) begin
+							byte_addr <= byte_addr + 1'd1;
+							data_length <= next_length;
+							if (!next_length) begin
+								wt_data <= 0;
+								buff_wr <= 0;
+								wt_ok <= 0;
+								wt_on <= 1;
+								wt_sector <= wdreg_sector;
+								wdreg_sector <= wt_r;
+								state <= 32'd23;
+							end
+						end
+						else if (wt_id) begin
+							wt_idx <= wt_idx + 1'd1;
+							if (wt_idx == 2'd2)
+								wt_r <= wdreg_data;
+							if (wt_idx == 2'd3) begin
+								wt_id <= 0;
+								wt_ok <= (wdreg_data[1:0] == wd_size_code) && (wt_r != 0) && (wt_r <= sectors_per_track);
+							end
+						end
+						else begin
+							wt_f5 <= (wdreg_data == 8'hF5);
+							if (wt_f5 && wdreg_data == 8'hFE) begin
+								wt_id <= 1;
+								wt_idx <= 0;
+							end
+							if (wt_f5 && wdreg_data == 8'hFB && wt_ok) begin
+								wt_data <= 1;
+								buff_wr <= 1;
+								byte_addr <= 0;
+								data_length <= sector_size;
+							end
+						end
+					end
+				32'd23: begin
+					blk_max <= blk_size;
+					byte_addr <= 0;
+					state <= 32'd10;
+				end
+				32'd24: begin
+					wdreg_sector <= wt_sector;
+					state <= (wt_cnt >= 13'd6399 ? 32'd19 : 32'd20);
+					if (wt_cnt >= 13'd6399)
+						wt_on <= 0;
+				end
 				32'd19: begin
 					format <= 0;
+					wt_on <= 0;
 					buff_rd <= 0;
 					if (RWMODE)
 						buff_wr <= 0;
@@ -612,7 +706,18 @@ module wd1793 (
 									s_wpe <= din[5];
 									{s_wrfault, s_seekerr, s_crcerr, s_lostdata} <= 0;
 									s_drq_busy <= 2'b01;
-									state <= 32'd17;
+									// karabas: see wt_on
+									if (RWMODE && !s_readonly) begin
+										{wt_f5, wt_id, wt_data, wt_ok} <= 0;
+										wt_on <= 1;
+										wt_cnt <= 0;
+										{write, buff_rd} <= 0;
+										state <= 32'd20;
+									end
+									else begin
+										s_wrfault <= s_readonly;
+										state <= 32'd17;
+									end
 								end
 								'he: begin
 									{s_wrfault, s_crcerr, s_lostdata} <= 0;

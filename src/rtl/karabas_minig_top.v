@@ -12,9 +12,10 @@
  ft-clk-out-required). HDMI: kg_dcm 5 x clk_sys and its inverse.
 
  Soft switches (the index of the item in the osd of core.json, file items included):
-   0 Disk A (F 4)   1 Disk B (F 5)   2 ROM disk (FL 0)   3 ORDOS file (FL 1)   4 RKO file (FL 3)
-   5 Monitor (FL 2)   6 -   7 CPU (KR580VM80A / Z80)   8 Z80 speed (2.5 / 5 / 10 MHz)
-   9 RAM (256 / 512 KB / 1 MB)   10 Keyboard (RK-86 / MS7007)   11 -   12 Reset
+   0 Disk A (F 4)   1 Disk B (F 5)   2 HDD master (F 6)   3 HDD slave (F 7)   4 ROM disk (FL 0)
+   5 ORDOS file (FL 1)   6 RKO file (FL 3)   7 Monitor (FL 2)   8 -   9 CPU (KR580VM80A / Z80)
+   10 Z80 speed (2.5 / 5 / 10 MHz)   11 RAM (256 / 512 KB / 1 MB)   12 Keyboard (RK-86 / MS7007)
+   13 -   14 Reset
 */
 
 module karabas_minig_top (
@@ -210,11 +211,14 @@ wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
 wire [8:0] img_data_addr;
 wire [15:0] img_sum;
 wire [23:0] img_q_di;
+wire [7:0] rtc_a, rtc_di, rtc_do;
+wire rtc_cs, rtc_wr_n;
 
 kg_mcu #(
 	.BURST_MAX_MHZ(32),  // Rev.G has MCU_SCK on a global clock pin
 	.CS_FILTER(3),
-	.ENABLE_RTC(0),
+	.ENABLE_RTC(1),
+	.RTC_SKIP_0D(1),     // C and D are flags of the MC146818
 	.ENABLE_UART(0),
 	.ENABLE_MATRIX(0),
 	.ENABLE_DEBUG(0),
@@ -272,10 +276,11 @@ kg_mcu #(
 	// not used by this core
 	.PS2_COMMAND(16'h0000),
 	.PS2_COMMAND_WR(1'b0),
-	.RTC_A(8'h00),
-	.RTC_DI(8'h00),
-	.RTC_CS(1'b0),
-	.RTC_WR_N(1'b1),
+	.RTC_A(rtc_a),
+	.RTC_DI(rtc_di),
+	.RTC_DO(rtc_do),
+	.RTC_CS(rtc_cs),
+	.RTC_WR_N(rtc_wr_n),
 	.UART_TX_DATA(8'h00),
 	.UART_TX_WR(1'b0),
 	.UART_TX_MODE(1'b0),
@@ -314,24 +319,25 @@ assign SD_CLK = mcu_sck_ibufg;
 
 // ------------------------------------------------------------------ soft switches
 
-wire [13*8-1:0] sw;
-kg_soft_switches #(.N(13)) soft_switches (
+wire [15*8-1:0] sw;
+kg_soft_switches #(.N(15)) soft_switches (
 	.clk(clk_sys),
 	.command(softsw_command),
 	.regs(sw),
 	.upd()
 );
-wire sw_z80 = sw[7*8];
-wire [1:0] sw_speed = sw[8*8 +: 2];
-wire [1:0] sw_ram = sw[9*8 +: 2];
-wire sw_ms7007 = sw[10*8];
-wire sw_reset = sw[12*8];
+wire sw_z80 = sw[9*8];
+wire [1:0] sw_speed = sw[10*8 +: 2];
+wire [1:0] sw_ram = sw[11*8 +: 2];
+wire sw_ms7007 = sw[12*8];
+wire sw_reset = sw[14*8];
 
 // ------------------------------------------------------------------ the machine
 
 wire [23:0] video_rgb;
 wire video_hs, video_vs, video_de;
 wire beep;
+wire [9:0] ay_sound;
 
 orion_system orion (
 	.clk(clk_sys),
@@ -367,7 +373,13 @@ orion_system orion (
 	.hs(video_hs),
 	.vs(video_vs),
 	.de(video_de),
+	.rtc_a(rtc_a),
+	.rtc_di(rtc_di),
+	.rtc_do(rtc_do),
+	.rtc_cs(rtc_cs),
+	.rtc_wr_n(rtc_wr_n),
 	.beep(beep),
+	.ay_sound(ay_sound),
 	.MA(MA),
 	.MD(MD),
 	.MWR_N(MWR_N)
@@ -390,7 +402,7 @@ kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100)) osd (
 
 // ------------------------------------------------------------------ audio
 
-wire [15:0] audio = beep ? 16'h1800 : 16'h0000;
+wire [15:0] audio = (beep ? 16'h1800 : 16'h0000) + { 2'b00, ay_sound, 4'b0000 };
 
 kg_pcm5102 #(.DIV_BITS(2)) dac (  // bck 5 MHz, 156 kHz
 	.clk(clk_sys),

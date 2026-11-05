@@ -13,7 +13,7 @@ B=$H/build
 mkdir -p "$B"
 "$H/vhdl2v.sh" "$B/vhdl" > /dev/null 2> "$B/vhdl.log" || { cat "$B/vhdl.log"; exit 1; }
 R=$S/rtl
-SRC="$H/tb_boot.v $R/orion/orion_system.v $R/orion/orion_cpu.v $R/orion/orion_ppi.v $R/orion/orion_sram.v $R/orion/orion_video.v $R/orion/orion_kbd.v $R/orion/orion_loader.v $R/orion/orion_fdd_cache.v $R/fdd/wd1793.v $S/../modules/rtl/mcu/img_sdc.v $S/../modules/rtl/mem/kg_spram.v $S/../modules/rtl/mem/kg_sdpram.v $R/vm80a/vm80a.v $B/vhdl/t80pa.v"
+SRC="$H/tb_boot.v $R/orion/orion_system.v $R/orion/orion_cpu.v $R/orion/orion_ppi.v $R/orion/orion_ide.v $R/../../modules/rtl/mcu/hdf_ata.v $R/jt49/jt49.v $R/jt49/jt49_cen.v $R/jt49/jt49_div.v $R/jt49/jt49_eg.v $R/jt49/jt49_exp.v $R/jt49/jt49_noise.v $R/orion/orion_sram.v $R/orion/orion_video.v $R/orion/orion_kbd.v $R/orion/orion_loader.v $R/orion/orion_fdd_cache.v $R/fdd/wd1793.v $S/../modules/rtl/mcu/img_sdc.v $S/../modules/rtl/mem/kg_spram.v $S/../modules/rtl/mem/kg_sdpram.v $R/vm80a/vm80a.v $B/vhdl/t80pa.v"
 verilator --language 1364-2005 --cc --exe --build -j 8 -O3 --top-module tb_boot -Mdir "$B/obj" -o sim_boot \
 	-Wno-fatal -Wno-lint -Wno-style -Wno-MULTIDRIVEN -Wno-UNOPTFLAT -Wno-PINMISSING -Wno-PINNOTFOUND \
 	--x-initial fast -CFLAGS -O2 $SRC "$H/sim_boot.cpp" > "$B/build.log" 2>&1 || { tail -30 "$B/build.log"; exit 1; }

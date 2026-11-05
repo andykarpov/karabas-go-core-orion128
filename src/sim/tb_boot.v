@@ -52,7 +52,8 @@ orion_system sys (
 	.img_data_addr(img_data_addr), .img_data(img_data), .img_result_wr(img_result_wr), .img_result(img_result),
 	.img_sum(img_sum), .img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd),
-	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep),
+	.rtc_a(), .rtc_di(), .rtc_do(8'h00), .rtc_cs(), .rtc_wr_n(),
+	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep), .ay_sound(),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );
 
@@ -68,6 +69,14 @@ end
 
 // +fdc: the writes to the floppy controller and the first reads of each kind
 reg fdc_log = 1'b0;
+reg ide_log = 1'b0;
+reg ide_s = 1'b0;
+initial ide_log = $test$plusargs("ide");
+always @(posedge clk)
+	ide_s <= sys.ide.strobe;
+always @(posedge clk)
+	if (ide_log && sys.ide.strobe && !ide_s)
+		$display("ide %s a%d cs %b do %04x di %04x bsy %b", sys.ide.ctl[6] ? "rd" : "wr", sys.ide.ctl[2:0], sys.ide.ctl[4:3], sys.ide.dout, sys.ide.dout_wr, sys.ide.ata.status[7]);
 initial fdc_log = $test$plusargs("fdc");
 always @(posedge clk)
 	if (fdc_log && sys.wr_p && sys.mem_wr && (sys.sel_fdc || sys.sel_rgu))
