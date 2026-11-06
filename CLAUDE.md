@@ -37,7 +37,7 @@ The closest sibling is `../karabas-go-core-msx`: a new core with the same split 
 - **Mini / Mini G: `FT_CLK_OUT` always carries about 8 MHz** (ODDR2), or the FT812 hums into the audio.
 - **Go: unused `FDC_*` outputs are 0**, the pins are high = active.
 - **SDRAM unused**, pins idle: on Mini G2 its `~CS` is the FLASH_CS_N line, drive that 1.
-- **OSD:** `CMD_SWITCHES` index = position of the item in `osd`, file, separator and page items included: a moved item changes the registers of the items after it. `F` and `FL` items need different `slot` numbers (one array in the firmware, `check_osd.py` checks it).
+- **OSD:** `CMD_SWITCHES` index = position of the item in `osd`, file, separator and page items included, unless the item has `"index"` (kgo2). To move, add or drop items without rebuilding the bitstreams, pin `"index"` on the switches after them to their old numbers and repack only the `.kg` (`python3 make_core.py core.json orion128.kg`), as was done for Reset (16). `F` and `FL` items need different `slot` numbers (one array in the firmware, `check_osd.py` checks it).
 - **8080 vs Z80:** `OUT n` of the 8080 repeats the port number on A15..8, so a latch at F8xx also answers `OUT F8`; on the Z80 decode IORQ instead. The beeper on INTE (`EI` / `DI`) exists only on the 8080.
 - **Verilog-2001 that XST accepts**, as `modules/CLAUDE.md` says. Imported code keeps its form; local changes are marked `// karabas:` with the reason.
 - **ROMs:** the Monitors and ROM disks are not ours. The user allowed M2 and one ROM disk in the repo and the `.kg` (2026-11-05); others come from `/orion` on the SD card through `FL` items.
