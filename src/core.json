@@ -1,7 +1,7 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110605",
+    "build": "26110606",
     "visible": true,
     "type": "osd",
     "order": 13,
@@ -32,7 +32,6 @@
     {"type": "S", "name": "Keyboard", "options": ["RK-86", "MS7007"], "default": 0, "hotkey": "Menu+K"},
     {"type": "S", "name": "Video", "options": ["800x600 60Hz", "720x576 50Hz"], "default": 0},
     {"type": "S", "name": "Mon half", "options": ["1", "2"], "default": 0, "hotkey": "Menu+M"},
-    {"type": "-"},
-    {"type": "T", "name": "Reset", "hotkey": "F12"}
+    {"type": "T", "name": "Reset", "index": 16, "hotkey": "F12"}
     ]
 }
