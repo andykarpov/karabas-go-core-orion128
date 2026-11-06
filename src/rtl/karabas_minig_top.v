@@ -338,6 +338,7 @@ wire [23:0] video_rgb;
 wire video_hs, video_vs, video_de;
 wire beep;
 wire [9:0] ay_sound;
+wire [7:0] dac8;
 
 orion_system orion (
 	.clk(clk_sys),
@@ -380,6 +381,7 @@ orion_system orion (
 	.rtc_wr_n(rtc_wr_n),
 	.beep(beep),
 	.ay_sound(ay_sound),
+	.dac(dac8),
 	.MA(MA),
 	.MD(MD),
 	.MWR_N(MWR_N)
@@ -402,7 +404,7 @@ kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100)) osd (
 
 // ------------------------------------------------------------------ audio
 
-wire [15:0] audio = (beep ? 16'h1800 : 16'h0000) + { 2'b00, ay_sound, 4'b0000 };
+wire [15:0] audio = (beep ? 16'h1800 : 16'h0000) + { 2'b00, ay_sound, 4'b0000 } + { 3'b000, dac8, 5'b00000 };
 
 kg_pcm5102 #(.DIV_BITS(2)) dac (  // bck 5 MHz, 156 kHz
 	.clk(clk_sys),

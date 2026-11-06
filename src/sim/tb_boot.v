@@ -53,7 +53,7 @@ orion_system sys (
 	.img_sum(img_sum), .img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd),
 	.rtc_a(), .rtc_di(), .rtc_do(8'h00), .rtc_cs(), .rtc_wr_n(),
-	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep), .ay_sound(),
+	.rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep), .ay_sound(), .dac(),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );
 
@@ -78,8 +78,33 @@ always @(posedge clk)
 	if (ide_log && sys.ide.strobe && !ide_s)
 		$display("ide %s a%d cs %b do %04x di %04x bsy %b", sys.ide.ctl[6] ? "rd" : "wr", sys.ide.ctl[2:0], sys.ide.ctl[4:3], sys.ide.dout, sys.ide.dout_wr, sys.ide.ata.status[7]);
 initial fdc_log = $test$plusargs("fdc");
+// +bus: the first memory and port accesses of the CPU
+reg bus_log = 1'b0;
+initial bus_log = $test$plusargs("bus");
+integer bus_n = 0;
+reg bus_d = 1'b0;
+always @(posedge clk) begin
+	bus_d <= sys.mem_rd | sys.mem_wr | sys.io_rd | sys.io_wr | sys.inta;
+	if (bus_log && bus_n < 400 && (sys.mem_rd | sys.mem_wr | sys.io_rd | sys.io_wr | sys.inta) && !bus_d) begin
+		bus_n = bus_n + 1;
+		$display("%s %04x di %02x do %02x ki %b ih %0d ie %b", sys.inta ? "ia" : sys.mem_rd ? "mr" : sys.mem_wr ? "mw" : sys.io_rd ? "ir" : "iw", sys.a, sys.cpu_di, sys.cpu_do, sys.key_irq, sys.int_hold, sys.key_ie);
+	end
+end
 always @(posedge clk)
 	if (fdc_log && sys.wr_p && sys.mem_wr && (sys.sel_fdc || sys.sel_rgu))
 		$display("fdc wr %04x = %02x", sys.a, sys.cpu_do);
+
+// +sd: the bytes of the SD card (orion_sd), the byte sent and the one the card gave
+reg sd_log = 1'b0;
+initial sd_log = $test$plusargs("sd");
+reg [7:0] sd_out = 8'hFF;
+always @(posedge clk) begin
+	if (sys.sd.d_wr && sys.sd.bitcnt == 3'd0)
+		sd_out <= sys.sd.cs_n ? 8'hFF : sys.sd.out;
+	if (sd_log && sys.sd.xfer)
+		$display("sd %02x -> %02x cs_n %b st %0d", sys.sd.tx, sd_out, sys.sd.cs_n, sys.sd.state);
+	if (sd_log && sys.sd.cs_wr)
+		$display("sd cs %02x", sys.cpu_do);
+end
 
 endmodule
