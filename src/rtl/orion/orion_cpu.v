@@ -23,6 +23,7 @@ module orion_cpu (
 	input wire cpu_z80,
 	input wire [1:0] speed,      // the Z80: 0 2.5, 1 5, 2 10 MHz
 	input wire rd_ok,
+	input wire hold,             // a wait for a slow device (READY of the 8080, the clock edges of the Z80)
 
 	output wire [15:0] addr,
 	output wire [7:0] dout,
@@ -62,7 +63,7 @@ vm80a_core cpu80 (
 	.pin_dena(),
 	.pin_hold(1'b0),
 	.pin_hlda(),
-	.pin_ready(1'b1),
+	.pin_ready(~hold),
 	.pin_wait(),
 	.pin_int(~int_n),
 	.pin_inte(inte_80),
@@ -79,7 +80,7 @@ wire mreq_n, iorq_n, rd_n, wr_n, m1_n;
 wire [3:0] per = speed == 2'd0 ? 4'd15 : speed == 2'd1 ? 4'd7 : 4'd3;
 wire [3:0] mid = { 1'b0, per[3:1] };
 wire z_rd = ~mreq_n & ~rd_n;
-wire z_go = speed == 2'd0 || !z_rd || rd_ok;
+wire z_go = (speed == 2'd0 || !z_rd || rd_ok) && !hold;
 reg [3:0] zc = 4'd0;
 wire z_edge = zc == per || zc == mid;
 always @(posedge clk)

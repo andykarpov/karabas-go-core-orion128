@@ -15,7 +15,7 @@
    0 Disk A (F 4)   1 Disk B (F 5)   2 HDD master (F 6)   3 HDD slave (F 7)   4 ROM disk (FL 0)
    5 ORDOS file (FL 1)   6 RKO file (FL 3)   7 Monitor (FL 2)   8 -   9 CPU (KR580VM80A / Z80)
    10 Z80 speed (2.5 / 5 / 10 MHz)   11 RAM (256 / 512 KB / 1 MB)   12 Keyboard (RK-86 / MS7007)
-   13 -   14 Reset
+   13 Video (800 x 600 60 Hz / 720 x 576 50 Hz)   14 -   15 Reset
 */
 
 module karabas_minig_top (
@@ -152,7 +152,8 @@ kg_pll #(
 	.CLKFBOUT_MULT(16),
 	.CLKOUT0_DIVIDE(20),
 	.CLKOUT1_DIVIDE(100),
-	.BUFG_MASK(6'b000011)
+	.CLKOUT2_DIVIDE(20),
+	.BUFG_MASK(6'b000011)  // clk_out[2] raw: the BUFGMUX of the pixel clock
 ) pll (
 	.clk_in(CLK_50MHZ),
 	.rst(1'b0),
@@ -163,13 +164,45 @@ assign clk_sys = pll_clk[0];
 assign clk_8 = pll_clk[1];
 assign areset = ~locked;
 
+// the pixel clock: clk_sys for 800 x 600 at 60 Hz, 27.0 MHz (8 MHz * 27 / 8, a DCM) for 720 x 576 at
+// 50 Hz (Video in the OSD). BUFGMUX takes the raw outputs: the third output of the PLL (40 MHz, the
+// twin of clk_sys) and the CLKFX of the DCM.
+wire clk40_raw = pll_clk[2];
+wire clk27_raw, locked27;
+DCM_SP #(
+	.CLKFX_MULTIPLY(27),
+	.CLKFX_DIVIDE(8),
+	.CLKIN_PERIOD(125.0),
+	.CLK_FEEDBACK("NONE"),
+	.STARTUP_WAIT("FALSE")
+) dcm27 (
+	.CLKIN(clk_8), .CLKFB(1'b0), .RST(areset), .LOCKED(locked27), .CLKFX(clk27_raw),
+	.CLK0(), .CLK90(), .CLK180(), .CLK270(), .CLK2X(), .CLK2X180(), .CLKDV(), .CLKFX180(),
+	.PSCLK(1'b0), .PSEN(1'b0), .PSINCDEC(1'b0), .PSDONE(), .STATUS(), .DSSEN(1'b0)
+);
+wire pal;                     // 720 x 576 at 50 Hz (sw_video, from the soft switches)
+wire clk_pix;
+BUFGMUX pixmux (.I0(clk40_raw), .I1(clk27_raw), .S(pal), .O(clk_pix));
+
+// a change of the video mode: the pixel clock changes, the clocks after it restart
+reg pal_d = 1'b0;
+reg [7:0] vrst = 8'hFF;
+always @(posedge clk_sys) begin
+	pal_d <= pal;
+	if (pal != pal_d || areset || (pal && !locked27))
+		vrst <= 8'hFF;
+	else if (vrst != 8'd0)
+		vrst <= vrst - 8'd1;
+end
+wire video_reset = vrst != 8'd0;
+
 kg_dcm #(
 	.CLKIN_PERIOD(25.0),
 	.CLKFX_MULTIPLY(5),
 	.CLKFX_DIVIDE(1)
 ) pllx5 (
-	.clk_in(clk_sys),
-	.rst(areset),
+	.clk_in(clk_pix),
+	.rst(video_reset),
 	.clk_fx(clk_hdmi),
 	.clk_fx180(clk_hdmi_n),
 	.clk_0(),
@@ -193,6 +226,7 @@ assign MCU_IO[0] = 1'bz;
 assign MCU_IO[5:2] = 4'bzzzz;
 
 wire [7:0] kb_scancode;
+wire [12:0] joy_l, joy_r;
 wire kb_scancode_upd;
 wire rom_active, rom_wr;
 wire [31:0] rom_addr;
@@ -244,6 +278,8 @@ kg_mcu #(
 
 	.KB_SCANCODE(kb_scancode),
 	.KB_SCANCODE_UPD(kb_scancode_upd),
+	.JOY_L(joy_l),
+	.JOY_R(joy_r),
 
 	.ROMLOADER_ACTIVE(rom_active),
 	.ROMLOAD_ADDR(rom_addr),
@@ -318,8 +354,8 @@ assign SD_CLK = mcu_sck_ibufg;
 
 // ------------------------------------------------------------------ soft switches
 
-wire [15*8-1:0] sw;
-kg_soft_switches #(.N(15)) soft_switches (
+wire [16*8-1:0] sw;
+kg_soft_switches #(.N(16)) soft_switches (
 	.clk(clk_sys),
 	.command(softsw_command),
 	.regs(sw),
@@ -329,12 +365,13 @@ wire sw_z80 = sw[9*8];
 wire [1:0] sw_speed = sw[10*8 +: 2];
 wire [1:0] sw_ram = sw[11*8 +: 2];
 wire sw_ms7007 = sw[12*8];
-wire sw_reset = sw[14*8];
+wire sw_reset = sw[15*8];
+assign pal = sw[13*8];
 
 // ------------------------------------------------------------------ the machine
 
 wire [23:0] video_rgb;
-wire video_hs, video_vs, video_de;
+wire video_hs, video_vs, video_de, video_osd_hs;
 wire beep;
 wire [9:0] ay_sound;
 wire [7:0] dac8;
@@ -346,6 +383,7 @@ orion_system orion (
 	.cpu_speed(sw_speed),
 	.ram_size(sw_ram),
 	.kb_ms7007(sw_ms7007),
+	.joy(joy_l | joy_r),
 	.rom_active(rom_active),
 	.rom_addr(rom_addr[21:0]),
 	.rom_data(rom_data),
@@ -369,10 +407,13 @@ orion_system orion (
 	.img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode),
 	.kb_scancode_upd(kb_scancode_upd),
+	.clk_pix(clk_pix),
+	.pal(pal),
 	.rgb(video_rgb),
 	.hs(video_hs),
 	.vs(video_vs),
 	.de(video_de),
+	.osd_hs(video_osd_hs),
 	.rtc_a(rtc_a),
 	.rtc_di(rtc_di),
 	.rtc_do(rtc_do),
@@ -380,6 +421,10 @@ orion_system orion (
 	.rtc_wr_n(rtc_wr_n),
 	.beep(beep),
 	.ay_sound(ay_sound),
+	.img_phys_wr(1'b0),
+	.img_phys(16'd0),
+	.FDC_INDEX(1'b0), .FDC_DRIVE(), .FDC_MOTOR(), .FDC_DIR(), .FDC_STEP(), .FDC_WDATA(), .FDC_WGATE(),
+	.FDC_TR00(1'b0), .FDC_WPRT(1'b0), .FDC_RDATA(1'b0), .FDC_SIDE_N(),
 	.tape_in(TAPE_IN),
 	.tape_out(TAPE_OUT),
 	.dac(dac8),
@@ -390,17 +435,32 @@ orion_system orion (
 
 // ------------------------------------------------------------------ OSD
 
+// the OSD commands of kg_mcu (clk_sys) into clk_pix: a word that changes is a command, it crosses
+// through a fifo and comes out as a change again (as core-msx)
+reg [15:0] osd_cmd_d = 16'd0;
+always @(posedge clk_sys)
+	osd_cmd_d <= osd_command;
+wire osd_fifo_empty;
+wire [15:0] osd_cmd_pix;
+kg_async_fifo #(.DW(16), .AW(4)) osd_fifo (
+	.wclk(clk_sys), .wreset(areset), .wr(osd_command != osd_cmd_d), .din(osd_command), .full(),
+	.rclk(clk_pix), .rreset(areset), .rd(!osd_fifo_empty), .dout(osd_cmd_pix), .empty(osd_fifo_empty),
+	.rcount()
+);
+
 // in the middle of 800 x 600: the counters start at the leading edge of the syncs, a step is two
 // pixels / lines: the picture starts 216 pixels and 27 lines after them, the OSD (512 x 416) 144
-// pixels and 92 lines into it
+// pixels and 92 lines into it. 720 x 576: orion_video_576 gives a sync 360 pixels before the OSD,
+// the OSD starts 124 lines (62 steps) after vsync
 wire [23:0] osd_rgb;
-kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100)) osd (
-	.clk(clk_sys),
+kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100), .V_OFFSET_IN(1)) osd (
+	.clk(clk_pix),
 	.rgb_i(video_rgb),
 	.rgb_o(osd_rgb),
-	.hsync_i(video_hs),
+	.hsync_i(video_osd_hs),
 	.vsync_i(video_vs),
-	.osd_command(osd_command)
+	.v_offset(pal ? 11'd62 : 11'd59),
+	.osd_command(osd_cmd_pix)
 );
 
 // ------------------------------------------------------------------ audio
@@ -419,32 +479,61 @@ kg_pcm5102 #(.DIV_BITS(2)) dac (  // bck 5 MHz, 156 kHz
 
 // ------------------------------------------------------------------ HDMI
 
-// the audio sample clock of hdmi_tx: 48 kHz of clk_sys (+ 3 per clock, modulo 2500)
-reg [11:0] aud_acc = 12'd0;
-reg aud_stb = 1'b0;
+// the audio sample into clk_pix: held on clk_sys at 48 kHz (a toggle tells), taken on clk_pix at the
+// change of the synchronised toggle (the sample is stable then: it changes 20 us later), as core-msx
+reg [15:0] smp = 16'd0;
+reg smp_tog = 1'b0;
+reg [11:0] smp_acc = 12'd0;   // 48 kHz from 40 MHz: + 3 per clock, modulo 2500
 always @(posedge clk_sys) begin
+	if (smp_acc >= 12'd2500 - 12'd3) begin
+		smp_acc <= smp_acc + 12'd3 - 12'd2500;
+		smp <= audio;
+		smp_tog <= ~smp_tog;
+	end
+	else
+		smp_acc <= smp_acc + 12'd3;
+end
+wire smp_tog_pix;
+kg_sync smp_sync (.clk(clk_pix), .d(smp_tog), .q(smp_tog_pix));
+reg smp_tog_pix_d = 1'b0;
+reg [23:0] hdmi_smp = 24'd0;
+always @(posedge clk_pix) begin
+	smp_tog_pix_d <= smp_tog_pix;
+	if (smp_tog_pix != smp_tog_pix_d)
+		hdmi_smp <= { smp, 8'd0 };
+end
+
+// the audio sample clock of hdmi_tx: 48 kHz of clk_pix (40 MHz: + 3 per clock modulo 2500; 27 MHz:
+// + 16 modulo 9000)
+reg [13:0] aud_acc = 14'd0;
+reg aud_stb = 1'b0;
+wire [13:0] aud_step = pal ? 14'd16 : 14'd3;
+wire [13:0] aud_mod = pal ? 14'd9000 : 14'd2500;
+always @(posedge clk_pix) begin
 	aud_stb <= 1'b0;
-	if (aud_acc >= 12'd2500 - 12'd3) begin
-		aud_acc <= aud_acc + 12'd3 - 12'd2500;
+	if (aud_acc >= aud_mod - aud_step) begin
+		aud_acc <= aud_acc + aud_step - aud_mod;
 		aud_stb <= 1'b1;
 	end
 	else
-		aud_acc <= aud_acc + 12'd3;
+		aud_acc <= aud_acc + aud_step;
 end
+wire dvi_only_pix;
+kg_sync dvi_sync (.clk(clk_pix), .d(dvi_only), .q(dvi_only_pix));
 
-// 800 x 600: positive syncs
+// 800 x 600: positive syncs; 720 x 576: negative
 hdmi_tx #(.SAMPLE_FREQ(48000)) hdmi (
-	.clk(clk_sys),
+	.clk(clk_pix),
 	.sclk(clk_hdmi),
 	.sclk_n(clk_hdmi_n),
-	.reset(areset || ~lockedx5),
+	.reset(video_reset || ~lockedx5),
 	.rgb(osd_rgb),
-	.vsync(video_vs),
-	.hsync(video_hs),
+	.vsync(pal ? ~video_vs : video_vs),
+	.hsync(pal ? ~video_hs : video_hs),
 	.de(video_de),
-	.audio_en(~dvi_only),
-	.audio_l({ audio, 8'd0 }),
-	.audio_r({ audio, 8'd0 }),
+	.audio_en(~dvi_only_pix),
+	.audio_l(hdmi_smp),
+	.audio_r(hdmi_smp),
 	.audio_clk(aud_stb),
 	.tx_clk_n(TMDS_N[3]),
 	.tx_clk_p(TMDS_P[3]),

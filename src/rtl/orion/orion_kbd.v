@@ -19,6 +19,8 @@
  Its Shift is not that of a PC: a shifted host key gives the crossings of the US character, some
  with the Orion shift (5, 9) as well. They are taken when the key goes down; its release clears
  both crossings of the key. Change ms7007 only during reset.
+
+ joy: a joystick as keys of either layout: the arrows, A Space, B and Start Enter (VK).
 */
 
 module orion_kbd (
@@ -27,6 +29,7 @@ module orion_kbd (
 	input wire ms7007,
 	input wire [7:0] scancode,
 	input wire scancode_upd,    // toggles with each byte
+	input wire [12:0] joy,      // the joysticks of kg_mcu (both, or-ed): up, down, left, right, start, A, B in bits 1..7
 	input wire [7:0] scan,
 	output wire [7:0] ret,
 	output wire [3:0] pc_hi
@@ -309,10 +312,17 @@ always @(posedge clk) begin
 	end
 end
 
+// the joystick: pressed while held, on top of the keys
+wire j_up = joy[1], j_down = joy[2], j_left = joy[3], j_right = joy[4];
+wire j_space = joy[6], j_enter = joy[5] | joy[7];
+wire [63:0] kj = km | ({ 63'd0, j_left } << 6'o74) | ({ 63'd0, j_up } << 6'o75) | ({ 63'd0, j_right } << 6'o76) |
+                 ({ 63'd0, j_down } << 6'o77) | ({ 63'd0, j_enter } << 6'o72) | ({ 63'd0, j_space } << 6'o17);
+wire [127:0] mj = ms | ({ 127'd0, j_left } << 7'h50) | ({ 127'd0, j_right } << 7'h67) | ({ 127'd0, j_up } << 7'h75) |
+                  ({ 127'd0, j_down } << 7'h65) | ({ 127'd0, j_enter } << 7'h0A) | ({ 127'd0, j_space } << 7'h00);
 function [7:0] col;
 	input [2:0] e;
-	col = { km[{ e, 3'd7 }], km[{ e, 3'd6 }], km[{ e, 3'd5 }], km[{ e, 3'd4 }],
-	        km[{ e, 3'd3 }], km[{ e, 3'd2 }], km[{ e, 3'd1 }], km[{ e, 3'd0 }] };
+	col = { kj[{ e, 3'd7 }], kj[{ e, 3'd6 }], kj[{ e, 3'd5 }], kj[{ e, 3'd4 }],
+	        kj[{ e, 3'd3 }], kj[{ e, 3'd2 }], kj[{ e, 3'd1 }], kj[{ e, 3'd0 }] };
 endfunction
 
 wire [7:0] ret_rk = ~( (scan[0] ? 8'd0 : col(3'd0)) | (scan[1] ? 8'd0 : col(3'd7)) |
@@ -323,9 +333,9 @@ wire [7:0] ret_rk = ~( (scan[0] ? 8'd0 : col(3'd0)) | (scan[1] ? 8'd0 : col(3'd7
 // MS7007: a column read gives its rows 0..11; the Orion shift is (5, 9)
 function [11:0] mc;
 	input [2:0] c;
-	mc = { ms[{ c, 4'd11 }], ms[{ c, 4'd10 }], ms[{ c, 4'd9 }] | (c == 3'd5 && ms_sh), 1'b0,
-	       ms[{ c, 4'd7 }], ms[{ c, 4'd6 }], ms[{ c, 4'd5 }], ms[{ c, 4'd4 }],
-	       ms[{ c, 4'd3 }], ms[{ c, 4'd2 }], ms[{ c, 4'd1 }], ms[{ c, 4'd0 }] };
+	mc = { mj[{ c, 4'd11 }], mj[{ c, 4'd10 }], mj[{ c, 4'd9 }] | (c == 3'd5 && ms_sh), 1'b0,
+	       mj[{ c, 4'd7 }], mj[{ c, 4'd6 }], mj[{ c, 4'd5 }], mj[{ c, 4'd4 }],
+	       mj[{ c, 4'd3 }], mj[{ c, 4'd2 }], mj[{ c, 4'd1 }], mj[{ c, 4'd0 }] };
 endfunction
 wire [11:0] ret_ms = ~( (scan[0] ? 12'd0 : mc(3'd0)) | (scan[1] ? 12'd0 : mc(3'd1)) |
                         (scan[2] ? 12'd0 : mc(3'd2)) | (scan[3] ? 12'd0 : mc(3'd3)) |

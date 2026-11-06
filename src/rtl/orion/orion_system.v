@@ -29,13 +29,16 @@
  how a CPU that starts at 0000 finds its code at F800.
 */
 
-module orion_system (
+module orion_system #(
+	parameter PHYS_FDD = 0       // the floppy connector of the Karabas Go (orion_fdd_phys)
+) (
 	input wire clk,
 	input wire reset,
 	input wire cpu_z80,          // a change is a short reset
 	input wire [1:0] cpu_speed,  // the Z80: 0 2.5, 1 5, 2 10 MHz
 	input wire [1:0] ram_size,   // 0 256, 1 512 KB, 2 1 MB
 	input wire kb_ms7007,        // MS7007 keyboard (else RK-86), change it with a reset
+	input wire [12:0] joy,       // the joysticks as keys (orion_kbd)
 
 	// the ROM loader of the mcu
 	input wire rom_active,
@@ -67,10 +70,15 @@ module orion_system (
 	input wire [7:0] kb_scancode,
 	input wire kb_scancode_upd,
 
+	// the picture: 800 x 600 at 60 Hz on clk, or 720 x 576 at 50 Hz on clk_pix (pal, 27 MHz); hs / vs
+	// active high (576p wants them low on the pins), osd_hs the sync for the OSD overlay
+	input wire clk_pix,
+	input wire pal,
 	output wire [23:0] rgb,
 	output wire hs,
 	output wire vs,
 	output wire de,
+	output wire osd_hs,
 
 	output wire [7:0] rtc_a,
 	output wire [7:0] rtc_di,
@@ -80,6 +88,20 @@ module orion_system (
 
 	output wire beep,
 	output wire [9:0] ay_sound,
+	// the physical floppy drives (PHYS_FDD): CMD_IMG_PHYS of the mcu, the pins of the Go
+	input wire img_phys_wr,
+	input wire [15:0] img_phys,
+	input wire FDC_INDEX,
+	output wire [1:0] FDC_DRIVE,
+	output wire FDC_MOTOR,
+	output wire FDC_DIR,
+	output wire FDC_STEP,
+	output wire FDC_WDATA,
+	output wire FDC_WGATE,
+	input wire FDC_TR00,
+	input wire FDC_WPRT,
+	input wire FDC_RDATA,
+	output wire FDC_SIDE_N,
 	input wire tape_in,          // the tape: port C of the keyboard PPI, D4 in (RK-86 keyboard only: MS7007 has a row there), D0 out
 	output wire tape_out,
 	output wire [7:0] dac,
@@ -113,6 +135,8 @@ wire [7:0] cpu_do;
 reg [7:0] cpu_di;
 wire mem_rd, mem_wr, io_rd, io_wr, inte, inta;
 wire rd_ok;
+wire phys_now, phys_drq, phys_hold;
+wire [7:0] phys_do;
 wire int_n;
 
 orion_cpu cpu (
@@ -121,6 +145,7 @@ orion_cpu cpu (
 	.cpu_z80(z80),
 	.speed(spd),
 	.rd_ok(rd_ok),
+	.hold(phys_hold),
 	.addr(a),
 	.dout(cpu_do),
 	.din(cpu_di),
@@ -257,7 +282,7 @@ always @(posedge clk)
 assign tape_out = kb_pc_o[0];
 
 orion_kbd kbd (
-	.clk(clk), .reset(run_reset), .ms7007(kb_ms7007), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
+	.clk(clk), .reset(run_reset), .ms7007(kb_ms7007), .joy(joy), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
 	.scan(kb_scan), .ret(kb_ret), .pc_hi(kb_pc)
 );
 
@@ -316,8 +341,8 @@ always @* begin
 		else if (sel_rtc_a) cpu_di = rtc_ar;
 		else if (sel_rtc_d) cpu_di = rtc_do;
 		else if (sel_ay_mem && a[0]) cpu_di = ay_do;
-		else if (sel_fdc) cpu_di = fdc_do;
-		else if (sel_rgu) cpu_di = { 6'd0, fdc_drq, 1'b0 };
+		else if (sel_fdc) cpu_di = phys_now ? phys_do : fdc_do;
+		else if (sel_rgu) cpu_di = { 6'd0, phys_now ? phys_drq : fdc_drq, 1'b0 };
 		else if (!sel_dev) cpu_di = sram_do;
 	end
 	else if (io_rd && a[7:0] == 8'hFB)
@@ -534,6 +559,43 @@ always @(posedge clk)
 	fdc_div <= fdc_div + 3'd1;
 
 wire drive = rgu[0];
+
+// the physical drives: map_a / map_b 0 the image, 1 DS0, 2 DS1 (CMD_IMG_PHYS slot 4 / 5); a mount of an
+// image puts the drive back on it
+reg [1:0] map_a = 2'd0, map_b = 2'd0;
+always @(posedge clk) begin
+	if (sdc_img_mounted[4]) map_a <= 2'd0;
+	if (sdc_img_mounted[5]) map_b <= 2'd0;
+	if (PHYS_FDD && img_phys_wr && img_phys[15:8] == 8'd4) map_a <= img_phys[1:0];
+	if (PHYS_FDD && img_phys_wr && img_phys[15:8] == 8'd5) map_b <= img_phys[1:0];
+end
+wire [1:0] phys_ds = drive ? map_b : map_a;
+assign phys_now = PHYS_FDD && phys_ds != 2'd0;
+
+generate
+	if (PHYS_FDD) begin : g_phys
+		orion_fdd_phys phys (
+			.clk(clk), .reset(run_reset),
+			.sel(sel_fdc & phys_now), .a(a[1:0]), .rd(mem_rd), .wr(mem_wr), .din(cpu_do),
+			.dout(phys_do), .drq(phys_drq), .hold(phys_hold), .ds(phys_ds), .side(~rgu[4]),
+			.FDC_INDEX(FDC_INDEX), .FDC_DRIVE(FDC_DRIVE), .FDC_MOTOR(FDC_MOTOR), .FDC_DIR(FDC_DIR),
+			.FDC_STEP(FDC_STEP), .FDC_WDATA(FDC_WDATA), .FDC_WGATE(FDC_WGATE), .FDC_TR00(FDC_TR00),
+			.FDC_WPRT(FDC_WPRT), .FDC_RDATA(FDC_RDATA), .FDC_SIDE_N(FDC_SIDE_N)
+		);
+	end
+	else begin : g_nophys
+		assign phys_do = 8'hFF;
+		assign phys_drq = 1'b0;
+		assign phys_hold = 1'b0;
+		assign FDC_DRIVE = 2'b00;
+		assign FDC_MOTOR = 1'b0;
+		assign FDC_DIR = 1'b0;
+		assign FDC_STEP = 1'b0;
+		assign FDC_WDATA = 1'b0;
+		assign FDC_WGATE = 1'b0;
+		assign FDC_SIDE_N = 1'b0;
+	end
+endgenerate
 reg disk_a = 1'b0, disk_b = 1'b0;
 always @(posedge clk) begin
 	if (sdc_img_mounted[4]) disk_a <= |sdc_img_size[31:0];
@@ -549,7 +611,7 @@ wd1793 #(.RWMODE(1), .EDSK(0)) fdc (
 	.clk_sys(clk),
 	.ce(fdc_div == 3'd0),
 	.reset(run_reset),
-	.io_en(sel_fdc),
+	.io_en(sel_fdc & ~phys_now),
 	.rd(mem_rd),
 	.wr(mem_wr),
 	.addr(a[1:0]),
@@ -737,6 +799,11 @@ wire vid_req, vid_valid;
 wire [20:0] vid_addr;
 wire [15:0] vid_dout;
 
+wire v6_req, v5_req;
+wire [20:0] v6_addr, v5_addr;
+wire [23:0] v6_rgb, v5_rgb;
+wire v6_hs, v6_vs, v6_de, v5_hs, v5_vs, v5_de, v5_osd_hs;
+
 orion_video video (
 	.clk(clk),
 	.vmode(vmode[3:0]),
@@ -744,15 +811,43 @@ orion_video video (
 	.w512(pfa[7]),
 	.w480(vmode[7]),
 	.pcolor(pfc),
-	.vid_req(vid_req),
-	.vid_addr(vid_addr),
+	.vid_req(v6_req),
+	.vid_addr(v6_addr),
 	.vid_dout(vid_dout),
-	.vid_valid(vid_valid),
-	.rgb(rgb),
-	.hs(hs),
-	.vs(vs),
-	.de(de)
+	.vid_valid(vid_valid & ~pal),
+	.rgb(v6_rgb),
+	.hs(v6_hs),
+	.vs(v6_vs),
+	.de(v6_de)
 );
+
+orion_video_576 video576 (
+	.clk(clk),
+	.clk_pix(clk_pix),
+	.vmode(vmode[3:0]),
+	.vpage(pfa[1:0]),
+	.w512(pfa[7]),
+	.w480(vmode[7]),
+	.pcolor(pfc),
+	.vid_req(v5_req),
+	.vid_addr(v5_addr),
+	.vid_dout(vid_dout),
+	.vid_valid(vid_valid & pal),
+	.rgb(v5_rgb),
+	.hs(v5_hs),
+	.vs(v5_vs),
+	.de(v5_de),
+	.osd_hs(v5_osd_hs)
+);
+
+// one of them reads the SRAM; the other one runs on and its requests are dropped
+assign vid_req = pal ? v5_req : v6_req;
+assign vid_addr = pal ? v5_addr : v6_addr;
+assign rgb = pal ? v5_rgb : v6_rgb;
+assign hs = pal ? v5_hs : v6_hs;
+assign vs = pal ? v5_vs : v6_vs;
+assign de = pal ? v5_de : v6_de;
+assign osd_hs = pal ? v5_osd_hs : v6_hs;
 
 orion_sram sram (
 	.clk(clk),
