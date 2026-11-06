@@ -5,7 +5,8 @@
  orion_ppi.v
 
  KR580VV55 (i8255) in mode 0, all the Orion uses: three ports, each an input or a latch by the
- control word. A port set as input shows pX_i and drives FF on pX_o (the pull-ups of the bus). A
+ control word. A port set as input shows pX_i and drives FF on pX_o (the pull-ups of the bus);
+ pa_in tells that port A is an input (the IDE lines of orion_ide are idle then). A
  control word with D7 = 1 sets the directions and clears the latches, D7 = 0 sets or clears a bit
  of port C. After reset all ports are inputs (control word 9B). wr is a pulse of one clock.
 */
@@ -20,6 +21,7 @@ module orion_ppi (
 	input wire [7:0] pa_i,
 	input wire [7:0] pb_i,
 	input wire [7:0] pc_i,
+	output wire pa_in,
 	output wire [7:0] pa_o,
 	output wire [7:0] pb_o,
 	output wire [7:0] pc_o
@@ -56,6 +58,7 @@ always @(posedge clk) begin
 	end
 end
 
+assign pa_in = in_a;
 assign pa_o = in_a ? 8'hFF : la;
 assign pb_o = in_b ? 8'hFF : lb;
 assign pc_o = { in_ch ? 4'hF : lc[7:4], in_cl ? 4'hF : lc[3:0] };

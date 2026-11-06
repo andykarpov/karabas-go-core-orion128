@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Writes the test ROM of the Z80 Card II ports (a Monitor of 2 KB at F800, the Z80 only). Results in
 page 0: E000 the dispatcher (5A), E001 all RAM (77), E002 count of interrupts of 50 Hz, E003 port FB
-reads back (C0), E004 port FE page of the ROM disk (read through F500). Then it shows screen 1 on
+reads back (C0), E004 port FE page of the ROM disk (read through F500), E005 AY register 0 by the ports (A5), E006 AY
+register 2 by F7A0 / F7A1 (3C). Then it shows screen 1 on
 the screen of 512 points with lines at the two ends of row 0.
 usage: mkrom_card.py OUT"""
 import sys
@@ -44,6 +45,11 @@ e(0xDB, 0xFB); sta(0xE003)   # in a,(FB)
 e(0xFB)                      # ei
 # the ROM disk page 3 at 0: byte 0 of 130000
 ld_a(0x90); sta(0xF503); ld_a(3); out(0xFE); e(0xAF); sta(0xF501); sta(0xF502); lda(0xF500); sta(0xE004)
+# AY: register 0 through FFFD / BFFD, read back by IN FFFD; register 2 through F7A1 / F7A0, read back at F7A1
+e(0x01, 0xFD, 0xFF); e(0xAF); e(0xED, 0x79)          # ld bc,FFFD; xor a; out (c),a
+e(0x06, 0xBF); ld_a(0xA5); e(0xED, 0x79)             # ld b,BF; ld a,A5; out (c),a
+e(0x06, 0xFF); e(0xED, 0x78); sta(0xE005)            # ld b,FF; in a,(c)
+ld_a(2); sta(0xF7A1); ld_a(0x3C); sta(0xF7A0); lda(0xF7A1); sta(0xE006)
 # screen 1, 512 points, mono
 ld_a(0x81); out(0xFA); e(0xAF); out(0xF8)
 ld_a(0xFF); sta(0x8000); sta(0xBF00)

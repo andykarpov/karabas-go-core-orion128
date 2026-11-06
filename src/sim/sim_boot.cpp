@@ -2,7 +2,7 @@
 //
 //   sim_boot --rom FILE:ADDR ... [--z80] [--speed N] [--ram N] [--ms7007] [--ms N] [--ppm OUT]
 //            [--key MS:CODE,CODE..] ... [--file MS:SLOT:FILE] ... [--expect ADDR:VALUE] ...
-//            [--disk FILE] [--save-disk OUT]
+//            [--disk FILE] [--hdd FILE] [--save-disk OUT]
 //
 // The ROMs go in through the ROM loader (one byte every 12 clocks). The machine then runs N ms of
 // its time. --ppm writes the last output frame, 800 x 600. --key sends PS/2 set 2 codes (hex) at
@@ -35,13 +35,15 @@ static void tick() {
 
 // ---- the file mounter of the firmware (docs/protocol.md section 6), as core-msx sim_sys: a read is
 // answered with 512 bytes (one per 11 clk), the sum, the result; a write is taken with its bytes.
-static std::vector<uint8_t> disk;
+static std::vector<uint8_t> disks[8];       // by slot: 4 --disk, 6 --hdd
+#define disk disks[mcu_slot]
+static int mcu_slot = 4;
 static uint32_t mcu_lba = 0;
 static int mcu_op = 0, mcu_pos = -1, mcu_gap = 0, mcu_wcnt = 0, mcu_bank = 0, mcu_wsum_parts = 0;
 static int64_t mcu_wait = -1;
 static uint8_t mcu_wbuf[512];
 static uint16_t mcu_wsum = 0;
-static int mount_wait = 2000;
+static int mount_wait = 2000, mount_hd = 0;
 static int disk_reads = 0, disk_writes = 0;
 
 static void mcu_clk() {
@@ -50,8 +52,13 @@ static void mcu_clk() {
 	top->img_result_wr = 0;
 	top->img_mounted = 0;
 	if (mount_wait > 0 && --mount_wait == 0) {
-		top->img_size = disk.size();
+		top->img_size = disks[4].size();
 		top->img_mounted = 1 << 4;
+		mount_hd = 2000;
+	}
+	if (mount_hd > 0 && --mount_hd == 0 && !disks[6].empty()) {
+		top->img_size = disks[6].size();
+		top->img_mounted = 1 << 6;
 	}
 	if (top->img_q_wr && !top->img_q_ack) {
 		uint32_t w = top->img_q_di;
@@ -63,6 +70,7 @@ static void mcu_clk() {
 		}
 		else if (c == 0x43) {
 			mcu_op = d;
+			mcu_slot = a;
 			mcu_wcnt = 0; mcu_wsum_parts = 0; mcu_wsum = 0;
 			if (d == 1) { mcu_wait = 4000; disk_reads++; }
 		}
@@ -141,11 +149,12 @@ int main(int argc, char **argv) {
 			uint64_t at = strtoul(p, &p, 10) * 40000;
 			while (*p == ':' || *p == ',') { keys.push_back({ at, (int)strtoul(p + 1, &p, 16) }); at += 4000; }
 		}
-		else if (!strcmp(argv[i], "--disk")) {
+		else if (!strcmp(argv[i], "--disk") || !strcmp(argv[i], "--hdd")) {
+			std::vector<uint8_t> &d = disks[argv[i][2] == 'd' && argv[i][3] == 'i' ? 4 : 6];
 			FILE *f = fopen(argv[++i], "rb");
 			if (!f) { perror(argv[i]); return 2; }
-			fseek(f, 0, SEEK_END); disk.resize(ftell(f)); fseek(f, 0, SEEK_SET);
-			if (fread(disk.data(), 1, disk.size(), f) != disk.size()) return 2;
+			fseek(f, 0, SEEK_END); d.resize(ftell(f)); fseek(f, 0, SEEK_SET);
+			if (fread(d.data(), 1, d.size(), f) != d.size()) return 2;
 			fclose(f);
 		}
 		else if (!strcmp(argv[i], "--save-disk")) save_disk = argv[++i];
@@ -169,7 +178,7 @@ int main(int argc, char **argv) {
 		else if (argv[i][0] != '+') { fprintf(stderr, "bad option %s\n", argv[i]); return 2; }
 	}
 	top->img_q_ack = 0; top->img_data_wr = 0; top->img_result_wr = 0; top->img_mounted = 0;
-	if (!disk.empty()) disk_p = &disk;
+	if (!disks[4].empty() || !disks[6].empty()) disk_p = &disks[4];
 	top->cpu_z80 = z80; top->cpu_speed = speed; top->ram_size = ram; top->kb_ms7007 = ms7007;
 	top->file_active = 0; top->file_wr = 0; top->file_slot = 0; top->file_addr = 0;
 	top->reset = 1; top->rom_active = 0; top->rom_wr = 0;
@@ -241,10 +250,10 @@ int main(int argc, char **argv) {
 		fwrite(last.data(), 1, last.size(), f);
 		fclose(f);
 	}
-	if (!disk.empty()) printf("disk: %d sectors read, %d written\n", disk_reads, disk_writes);
+	if (!disks[4].empty() || !disks[6].empty()) printf("disk: %d sectors read, %d written\n", disk_reads, disk_writes);
 	if (save_disk) {
 		FILE *f = fopen(save_disk, "wb");
-		fwrite(disk.data(), 1, disk.size(), f);
+		fwrite(disks[4].data(), 1, disks[4].size(), f);
 		fclose(f);
 	}
 	int bad = 0;
