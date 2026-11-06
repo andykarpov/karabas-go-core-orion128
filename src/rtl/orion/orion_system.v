@@ -71,14 +71,13 @@ module orion_system #(
 	input wire kb_scancode_upd,
 
 	// the picture: 800 x 600 at 60 Hz on clk, or 720 x 576 at 50 Hz on clk_pix (pal, 27 MHz); hs / vs
-	// active high (576p wants them low on the pins), osd_hs the sync for the OSD overlay
+	// active high (576p wants them low on the pins)
 	input wire clk_pix,
 	input wire pal,
 	output wire [23:0] rgb,
 	output wire hs,
 	output wire vs,
 	output wire de,
-	output wire osd_hs,
 
 	output wire [7:0] rtc_a,
 	output wire [7:0] rtc_di,
@@ -802,7 +801,7 @@ wire [15:0] vid_dout;
 wire v6_req, v5_req;
 wire [20:0] v6_addr, v5_addr;
 wire [23:0] v6_rgb, v5_rgb;
-wire v6_hs, v6_vs, v6_de, v5_hs, v5_vs, v5_de, v5_osd_hs;
+wire v6_hs, v6_vs, v6_de, v5_hs, v5_vs, v5_de;
 
 orion_video video (
 	.clk(clk),
@@ -824,6 +823,7 @@ orion_video video (
 orion_video_576 video576 (
 	.clk(clk),
 	.clk_pix(clk_pix),
+	.en(pal),
 	.vmode(vmode[3:0]),
 	.vpage(pfa[1:0]),
 	.w512(pfa[7]),
@@ -836,8 +836,7 @@ orion_video_576 video576 (
 	.rgb(v5_rgb),
 	.hs(v5_hs),
 	.vs(v5_vs),
-	.de(v5_de),
-	.osd_hs(v5_osd_hs)
+	.de(v5_de)
 );
 
 // one of them reads the SRAM; the other one runs on and its requests are dropped
@@ -847,7 +846,6 @@ assign rgb = pal ? v5_rgb : v6_rgb;
 assign hs = pal ? v5_hs : v6_hs;
 assign vs = pal ? v5_vs : v6_vs;
 assign de = pal ? v5_de : v6_de;
-assign osd_hs = pal ? v5_osd_hs : v6_hs;
 
 orion_sram sram (
 	.clk(clk),

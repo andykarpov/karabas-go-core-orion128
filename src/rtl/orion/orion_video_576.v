@@ -23,6 +23,7 @@
 module orion_video_576 (
 	input wire clk,
 	input wire clk_pix,
+	input wire en,                 // this output is on: else the fetch stops (the SRAM port is the other one's)
 	input wire [3:0] vmode,
 	input wire [1:0] vpage,
 	input wire w512,
@@ -37,8 +38,7 @@ module orion_video_576 (
 	output reg [23:0] rgb = 24'd0,
 	output reg hs = 1'b0,          // active high here (the top inverts them for the pins)
 	output reg vs = 1'b0,
-	output reg de = 1'b0,
-	output reg osd_hs = 1'b0       // a sync for kg_osd_overlay: its H_OFFSET of 800 x 600 centres the OSD here
+	output reg de = 1'b0
 );
 
 localparam H_TOTAL = 864, H_VISIBLE = 720, H_SYNC = 732, H_SYNC_END = 796;
@@ -77,7 +77,11 @@ wire [9:0] next_rel = next - V_TOP;
 always @(posedge clk) begin
 	vid_req <= 1'b0;
 	buf_we <= 1'b0;
-	if (new_line && !busy) begin
+	if (!en) begin
+		busy <= 1'b0;
+		waiting <= 1'b0;
+	end
+	else if (new_line && !busy) begin
 		// vcnt is stable for a line by now: the line after it
 		next <= (vcnt == V_TOTAL - 1) ? 10'd0 : vcnt + 10'd1;
 		busy <= 1'b1;
@@ -215,8 +219,6 @@ always @(posedge clk_pix) begin
 	de <= hcnt < H_VISIBLE && vcnt < V_VISIBLE;
 	hs <= hcnt >= H_SYNC && hcnt < H_SYNC_END;
 	vs <= vcnt >= V_SYNC && vcnt < V_SYNC_END;
-	// 360 pixels (180 steps of the overlay) before the OSD at x 104: from 608 of the line before
-	osd_hs <= hcnt >= 10'd608 && hcnt < 10'd672;
 	rgb <= (hcnt < H_VISIBLE && vcnt < V_VISIBLE) ?
 		{ code[2] ? level : 8'd0, code[1] ? level : 8'd0, code[0] ? level : 8'd0 } : 24'd0;
 end

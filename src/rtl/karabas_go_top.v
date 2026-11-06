@@ -176,22 +176,27 @@ assign clk_sys = pll_clk[0];
 assign clk_8 = pll_clk[1];
 assign areset = ~locked;
 
-// the pixel clock: clk_sys for 800 x 600 at 60 Hz, 27.0 MHz (8 MHz * 27 / 8, a DCM) for 720 x 576 at
-// 50 Hz (Video in the OSD). BUFGMUX takes the raw outputs: the third output of the PLL (40 MHz, the
-// twin of clk_sys) and the CLKFX of the DCM.
+// the pixel clock: clk_sys for 800 x 600 at 60 Hz, 27.0 MHz for 720 x 576 at
+// 50 Hz (Video in the OSD), of a second PLL on clk_sys (40 * 27 / 2 / 20: less jitter than a DCM for the
+// HDMI serialiser after it). BUFGMUX takes the raw outputs: the third output of the first PLL (40 MHz,
+// the twin of clk_sys) and that of pll27.
 wire clk40_raw = pll_clk[2];
 wire clk27_raw, locked27;
-DCM_SP #(
-	.CLKFX_MULTIPLY(27),
-	.CLKFX_DIVIDE(8),
-	.CLKIN_PERIOD(125.0),
-	.CLK_FEEDBACK("NONE"),
-	.STARTUP_WAIT("FALSE")
-) dcm27 (
-	.CLKIN(clk_8), .CLKFB(1'b0), .RST(areset), .LOCKED(locked27), .CLKFX(clk27_raw),
-	.CLK0(), .CLK90(), .CLK180(), .CLK270(), .CLK2X(), .CLK2X180(), .CLKDV(), .CLKFX180(),
-	.PSCLK(1'b0), .PSEN(1'b0), .PSINCDEC(1'b0), .PSDONE(), .STATUS(), .DSSEN(1'b0)
+wire [5:0] pll27_clk;
+kg_pll #(
+	.CLKIN_PERIOD(25.0),
+	.DIVCLK_DIVIDE(2),
+	.CLKFBOUT_MULT(27),     // VCO 540 MHz
+	.CLKOUT0_DIVIDE(20),    // 27.0 MHz
+	.BUFG_MASK(6'b000000),  // raw: the BUFGMUX of the pixel clock
+	.IBUFG(0)
+) pll27 (
+	.clk_in(clk_sys),
+	.rst(areset),
+	.clk_out(pll27_clk),
+	.locked(locked27)
 );
+assign clk27_raw = pll27_clk[0];
 wire pal;                     // 720 x 576 at 50 Hz (sw_video, from the soft switches)
 wire clk_pix;
 BUFGMUX pixmux (.I0(clk40_raw), .I1(clk27_raw), .S(pal), .O(clk_pix));
@@ -368,7 +373,7 @@ assign pal = sw[13*8];
 // ------------------------------------------------------------------ the machine
 
 wire [23:0] video_rgb;
-wire video_hs, video_vs, video_de, video_osd_hs;
+wire video_hs, video_vs, video_de;
 wire beep;
 wire [9:0] ay_sound;
 wire [7:0] dac8;
@@ -410,7 +415,6 @@ orion_system #(.PHYS_FDD(1)) orion (
 	.hs(video_hs),
 	.vs(video_vs),
 	.de(video_de),
-	.osd_hs(video_osd_hs),
 	.rtc_a(rtc_a),
 	.rtc_di(rtc_di),
 	.rtc_do(rtc_do),
@@ -448,16 +452,17 @@ kg_async_fifo #(.DW(16), .AW(4)) osd_fifo (
 
 // in the middle of 800 x 600: the counters start at the leading edge of the syncs, a step is two
 // pixels / lines: the picture starts 216 pixels and 27 lines after them, the OSD (512 x 416) 144
-// pixels and 92 lines into it. 720 x 576: orion_video_576 gives a sync 360 pixels before the OSD,
-// the OSD starts 124 lines (62 steps) after vsync
+// pixels and 92 lines into it. 720 x 576: the OSD at x 104, 236 pixels (118 steps) after hsync, and
+// 124 lines (62 steps) after vsync
 wire [23:0] osd_rgb;
-kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100), .V_OFFSET_IN(1)) osd (
+kg_osd_overlay #(.H_DIV4_WIDTH(1100), .V_OFFSET_IN(1), .H_OFFSET_IN(1)) osd (
 	.clk(clk_pix),
 	.rgb_i(video_rgb),
 	.rgb_o(osd_rgb),
-	.hsync_i(video_osd_hs),
+	.hsync_i(video_hs),
 	.vsync_i(video_vs),
 	.v_offset(pal ? 11'd62 : 11'd59),
+	.h_offset(pal ? 11'd118 : 11'd180),
 	.osd_command(osd_cmd_pix)
 );
 

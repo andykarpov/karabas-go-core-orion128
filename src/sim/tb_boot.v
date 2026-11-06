@@ -53,7 +53,7 @@ orion_system sys (
 	.img_sum(img_sum), .img_q_wr(img_q_wr), .img_q_di(img_q_di), .img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode), .kb_scancode_upd(kb_scancode_upd),
 	.joy(13'd0), .img_phys_wr(1'b0), .img_phys(16'd0), .FDC_INDEX(1'b0), .FDC_TR00(1'b0), .FDC_WPRT(1'b0), .FDC_RDATA(1'b0), .rtc_a(), .rtc_di(), .rtc_do(8'h00), .rtc_cs(), .rtc_wr_n(),
-	.clk_pix(clk), .pal(1'b0), .osd_hs(), .rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep), .ay_sound(), .dac(), .tape_in(1'b1), .tape_out(),
+	.clk_pix(clk), .pal(1'b0), .rgb(rgb), .hs(hs), .vs(vs), .de(de), .beep(beep), .ay_sound(), .dac(), .tape_in(1'b1), .tape_out(),
 	.MA(MA), .MD(MD), .MWR_N(MWR_N)
 );
 
