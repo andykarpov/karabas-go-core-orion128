@@ -1,7 +1,7 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110508",
+    "build": "26110601",
     "visible": true,
     "type": "osd",
     "order": 13,

@@ -80,6 +80,8 @@ module orion_system (
 
 	output wire beep,
 	output wire [9:0] ay_sound,
+	input wire tape_in,          // the tape: port C of the keyboard PPI, D4 in (RK-86 keyboard only: MS7007 has a row there), D0 out
+	output wire tape_out,
 	output wire [7:0] dac,
 
 	output wire [20:0] MA,
@@ -248,6 +250,11 @@ wire [7:0] ide_hi, ide_lo;
 wire [7:0] sram_do;
 wire [7:0] kb_scan, kb_ret;
 wire [3:0] kb_pc;
+wire [7:0] kb_pc_o;
+reg [1:0] tape_s = 2'b11;
+always @(posedge clk)
+	tape_s <= { tape_s[0], tape_in };
+assign tape_out = kb_pc_o[0];
 
 orion_kbd kbd (
 	.clk(clk), .reset(run_reset), .ms7007(kb_ms7007), .scancode(kb_scancode), .scancode_upd(kb_scancode_upd),
@@ -256,8 +263,8 @@ orion_kbd kbd (
 
 orion_ppi ppi_kbd (
 	.clk(clk), .reset(run_reset), .a(a[1:0]), .wr(wr_p & wr_dev & sel_f4), .din(cpu_do), .dout(ppi4_do),
-	.pa_i(8'hFF), .pb_i(kb_ret), .pc_i({kb_pc, 4'hF}),
-	.pa_in(), .pa_o(kb_scan), .pb_o(), .pc_o()
+	.pa_i(8'hFF), .pb_i(kb_ret), .pc_i({kb_pc[3:1], (kb_ms7007 ? kb_pc[0] : tape_s[1]), 4'hF}),
+	.pa_in(), .pa_o(kb_scan), .pb_o(), .pc_o(kb_pc_o)
 );
 
 // the ROM disk: B and C are the address, A the byte; or the IDE (orion_ide), with A as an output
