@@ -19,7 +19,8 @@
    0 Disk A (F 4)   1 Disk B (F 5)   2 HDD master (F 6)   3 HDD slave (F 7)   4 ROM disk (FL 0)
    5 ORDOS file (FL 1)   6 RKO file (FL 3)   7 Monitor (FL 2)   8 -   9 CPU (KR580VM80A / Z80)
    10 Z80 speed (2.5 / 5 / 10 MHz)   11 RAM (256 / 512 KB / 1 MB)   12 Keyboard (RK-86 / MS7007)
-   13 Video (800 x 600 60 Hz / 720 x 576 50 Hz)   14 -   15 Reset
+   13 Video (800 x 600 60 Hz / 720 x 576 50 Hz)   14 Monitor half (1 / 2 of a 4 KB file)   15 -
+   16 Reset
 */
 
 module karabas_go_top (
@@ -224,6 +225,8 @@ assign MCU_SPI_IO[0] = mcu_burst_ready;
 assign MCU_SPI_IO[1] = 1'bz;
 
 wire [7:0] kb_scancode;
+wire [7:0] uart_rx_data, uart_rx_idx, uart_tx_data;
+wire uart_tx_wr;
 wire [12:0] joy_l, joy_r;
 wire kb_scancode_upd;
 wire rom_active, rom_wr;
@@ -252,7 +255,7 @@ kg_mcu #(
 	.CS_FILTER(3),
 	.ENABLE_RTC(1),
 	.RTC_SKIP_0D(1),     // C and D are flags of the MC146818
-	.ENABLE_UART(0),
+	.ENABLE_UART(1),     // the UART of the Orion-2010
 	.ENABLE_MATRIX(0),
 	.ENABLE_DEBUG(0),
 	.ENABLE_IMG(1),      // the disks: the images of the F items
@@ -316,8 +319,10 @@ kg_mcu #(
 	.RTC_DO(rtc_do),
 	.RTC_CS(rtc_cs),
 	.RTC_WR_N(rtc_wr_n),
-	.UART_TX_DATA(8'h00),
-	.UART_TX_WR(1'b0),
+	.UART_RX_DATA(uart_rx_data),
+	.UART_RX_IDX(uart_rx_idx),
+	.UART_TX_DATA(uart_tx_data),
+	.UART_TX_WR(uart_tx_wr),
 	.UART_TX_MODE(1'b0),
 	.UART_DLM(8'h00),
 	.UART_DLL(8'h00),
@@ -356,8 +361,8 @@ assign SD_CLK = MCU_SCK;
 
 // ------------------------------------------------------------------ soft switches
 
-wire [16*8-1:0] sw;
-kg_soft_switches #(.N(16)) soft_switches (
+wire [17*8-1:0] sw;
+kg_soft_switches #(.N(17)) soft_switches (
 	.clk(clk_sys),
 	.command(softsw_command),
 	.regs(sw),
@@ -367,7 +372,8 @@ wire sw_z80 = sw[9*8];
 wire [1:0] sw_speed = sw[10*8 +: 2];
 wire [1:0] sw_ram = sw[11*8 +: 2];
 wire sw_ms7007 = sw[12*8];
-wire sw_reset = sw[15*8];
+wire sw_reset = sw[16*8];
+wire sw_mon_hi = sw[14*8];
 assign pal = sw[13*8];
 
 // ------------------------------------------------------------------ the machine
@@ -385,6 +391,11 @@ orion_system #(.PHYS_FDD(1)) orion (
 	.cpu_speed(sw_speed),
 	.ram_size(sw_ram),
 	.kb_ms7007(sw_ms7007),
+	.mon_hi(sw_mon_hi),
+	.uart_rx_data(uart_rx_data),
+	.uart_rx_idx(uart_rx_idx),
+	.uart_tx_data(uart_tx_data),
+	.uart_tx_wr(uart_tx_wr),
 	.joy(joy_l | joy_r),
 	.rom_active(rom_active),
 	.rom_addr(rom_addr[21:0]),
