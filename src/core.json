@@ -1,11 +1,12 @@
 {
     "id": "orion128",
     "name": "Orion-128",
-    "build": "26110601",
+    "build": "26110604",
     "visible": true,
     "type": "osd",
     "order": 13,
     "eeprom_bank": 255,
+    "drives": ["FDD0", "FDD1"],
     "roms": [
     {"filename": "roms/romdisk1.bin", "address": 1048576},
     {"filename": "roms/M2rk.bin", "address": 2097152}
@@ -16,8 +17,8 @@
         "minig": {"bitstream": "karabas_minig.bin"}
     },
     "osd": [
-    {"type": "F", "name": "Disk A", "slot": 4, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F5"},
-    {"type": "F", "name": "Disk B", "slot": 5, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F6"},
+    {"type": "F", "name": "Disk A", "slot": 4, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F5", "physical": 1},
+    {"type": "F", "name": "Disk B", "slot": 5, "extensions": ".odi,.img", "dir": "/orion", "hotkey": "Menu+F6", "physical": 1},
     {"type": "F", "name": "HDD master", "slot": 6, "extensions": ".ohi,.img,.hdd", "dir": "/orion"},
     {"type": "F", "name": "HDD slave", "slot": 7, "extensions": ".ohi,.img,.hdd", "dir": "/orion"},
     {"type": "FL", "name": "ROM disk", "slot": 0, "extensions": ".bin,.rom", "dir": "/orion", "hotkey": "Menu+F1"},
@@ -29,6 +30,7 @@
     {"type": "S", "name": "Z80 speed", "options": ["2.5 MHz", "5 MHz", "10 MHz"], "default": 0, "hotkey": "Menu+S", "enable_if": {"item": "CPU", "value": "Z80"}},
     {"type": "S", "name": "RAM", "options": ["256 KB", "512 KB", "1 MB"], "default": 1},
     {"type": "S", "name": "Keyboard", "options": ["RK-86", "MS7007"], "default": 0, "hotkey": "Menu+K"},
+    {"type": "S", "name": "Video", "options": ["800x600 60Hz", "720x576 50Hz"], "default": 0},
     {"type": "-"},
     {"type": "T", "name": "Reset", "hotkey": "F12"}
     ]

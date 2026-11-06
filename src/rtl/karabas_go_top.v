@@ -6,7 +6,8 @@
  The same as karabas_minig_top.v except the board (as core-msx): VGA 8:8:8 + V_CLK (40 MHz) instead
  of HDMI (no DCM, no audio over the video), no FT_CLK_OUT, MCU_SCK not on a clock pin (bursts at the
  link clock), the chip selects of the FT812 / SD2 on their own pins; the beeper of the Orion also on
- BEEPER; the floppy connector unused, its outputs 0 (they are high = active on the Go).
+ BEEPER; the floppy connector: a physical drive for Disk A / B (orion_fdd_phys, outputs 0 while unused:
+ they are high = active on the Go).
 
  The machine is orion_system; all file work goes through the firmware: the ROMs of core.json by the
  ROM loader, a ROM disk, a Monitor and ORDOS files by the FL items of the OSD (orion_loader).
@@ -18,7 +19,7 @@
    0 Disk A (F 4)   1 Disk B (F 5)   2 HDD master (F 6)   3 HDD slave (F 7)   4 ROM disk (FL 0)
    5 ORDOS file (FL 1)   6 RKO file (FL 3)   7 Monitor (FL 2)   8 -   9 CPU (KR580VM80A / Z80)
    10 Z80 speed (2.5 / 5 / 10 MHz)   11 RAM (256 / 512 KB / 1 MB)   12 Keyboard (RK-86 / MS7007)
-   13 -   14 Reset
+   13 Video (800 x 600 60 Hz / 720 x 576 50 Hz)   14 -   15 Reset
 */
 
 module karabas_go_top (
@@ -141,14 +142,7 @@ assign UART_RX = 1'bz;
 assign UART_TX = 1'bz;
 assign UART_CTS = 1'bz;
 
-// the floppy connector: all 0 (the Go has inverters, high = active)
-assign FDC_DRIVE = 2'b00;
-assign FDC_MOTOR = 1'b0;
-assign FDC_DIR = 1'b0;
-assign FDC_STEP = 1'b0;
-assign FDC_WDATA = 1'b0;
-assign FDC_WGATE = 1'b0;
-assign FDC_SIDE_N = 1'b0;
+// the floppy connector: orion_fdd_phys (its outputs 0 while no drive is on it)
 
 assign FLASH_CS_N = 1'b1;
 assign FLASH_DI = 1'b1;
@@ -170,7 +164,8 @@ kg_pll #(
 	.CLKFBOUT_MULT(16),
 	.CLKOUT0_DIVIDE(20),
 	.CLKOUT1_DIVIDE(100),
-	.BUFG_MASK(6'b000011)
+	.CLKOUT2_DIVIDE(20),
+	.BUFG_MASK(6'b000011)  // clk_out[2] raw: the BUFGMUX of the pixel clock
 ) pll (
 	.clk_in(CLK_50MHZ),
 	.rst(1'b0),
@@ -181,8 +176,45 @@ assign clk_sys = pll_clk[0];
 assign clk_8 = pll_clk[1];
 assign areset = ~locked;
 
+// the pixel clock: clk_sys for 800 x 600 at 60 Hz, 27.0 MHz for 720 x 576 at
+// 50 Hz (Video in the OSD), of a second PLL on clk_sys (40 * 27 / 2 / 20: less jitter than a DCM for the
+// HDMI serialiser after it). BUFGMUX takes the raw outputs: the third output of the first PLL (40 MHz,
+// the twin of clk_sys) and that of pll27.
+wire clk40_raw = pll_clk[2];
+wire clk27_raw, locked27;
+wire [5:0] pll27_clk;
+kg_pll #(
+	.CLKIN_PERIOD(25.0),
+	.DIVCLK_DIVIDE(2),
+	.CLKFBOUT_MULT(27),     // VCO 540 MHz
+	.CLKOUT0_DIVIDE(20),    // 27.0 MHz
+	.BUFG_MASK(6'b000000),  // raw: the BUFGMUX of the pixel clock
+	.IBUFG(0)
+) pll27 (
+	.clk_in(clk_sys),
+	.rst(areset),
+	.clk_out(pll27_clk),
+	.locked(locked27)
+);
+assign clk27_raw = pll27_clk[0];
+wire pal;                     // 720 x 576 at 50 Hz (sw_video, from the soft switches)
+wire clk_pix;
+BUFGMUX pixmux (.I0(clk40_raw), .I1(clk27_raw), .S(pal), .O(clk_pix));
+
+// a change of the video mode: the pixel clock changes, the clocks after it restart
+reg pal_d = 1'b0;
+reg [7:0] vrst = 8'hFF;
+always @(posedge clk_sys) begin
+	pal_d <= pal;
+	if (pal != pal_d || areset || (pal && !locked27))
+		vrst <= 8'hFF;
+	else if (vrst != 8'd0)
+		vrst <= vrst - 8'd1;
+end
+wire video_reset = vrst != 8'd0;
+
 // the pixel clock of the video DAC
-ODDR2 oddr_v_clk (.Q(V_CLK), .C0(clk_sys), .C1(~clk_sys), .CE(1'b1), .D0(1'b1), .D1(1'b0), .R(1'b0), .S(1'b0));
+ODDR2 oddr_v_clk (.Q(V_CLK), .C0(clk_pix), .C1(~clk_pix), .CE(1'b1), .D0(1'b1), .D1(1'b0), .R(1'b0), .S(1'b0));
 
 // ------------------------------------------------------------------ MCU
 
@@ -192,6 +224,7 @@ assign MCU_SPI_IO[0] = mcu_burst_ready;
 assign MCU_SPI_IO[1] = 1'bz;
 
 wire [7:0] kb_scancode;
+wire [12:0] joy_l, joy_r;
 wire kb_scancode_upd;
 wire rom_active, rom_wr;
 wire [31:0] rom_addr;
@@ -209,6 +242,8 @@ wire img_data_wr, img_result_wr, img_q_wr, img_q_ack;
 wire [8:0] img_data_addr;
 wire [15:0] img_sum;
 wire [23:0] img_q_di;
+wire img_phys_wr;
+wire [15:0] img_phys;
 wire [7:0] rtc_a, rtc_di, rtc_do;
 wire rtc_cs, rtc_wr_n;
 
@@ -243,6 +278,8 @@ kg_mcu #(
 
 	.KB_SCANCODE(kb_scancode),
 	.KB_SCANCODE_UPD(kb_scancode_upd),
+	.JOY_L(joy_l),
+	.JOY_R(joy_r),
 
 	.ROMLOADER_ACTIVE(rom_active),
 	.ROMLOAD_ADDR(rom_addr),
@@ -302,6 +339,8 @@ kg_mcu #(
 	.IMG_Q_WR(img_q_wr),
 	.IMG_Q_DI(img_q_di),
 	.IMG_Q_ACK(img_q_ack),
+	.IMG_PHYS_WR(img_phys_wr),
+	.IMG_PHYS(img_phys),
 	.ESP_UART_RX_DATA(8'h00),
 	.ESP_UART_RX_WR(1'b0),
 	.FLASHBOOT_START(1'b0),
@@ -317,8 +356,8 @@ assign SD_CLK = MCU_SCK;
 
 // ------------------------------------------------------------------ soft switches
 
-wire [15*8-1:0] sw;
-kg_soft_switches #(.N(15)) soft_switches (
+wire [16*8-1:0] sw;
+kg_soft_switches #(.N(16)) soft_switches (
 	.clk(clk_sys),
 	.command(softsw_command),
 	.regs(sw),
@@ -328,7 +367,8 @@ wire sw_z80 = sw[9*8];
 wire [1:0] sw_speed = sw[10*8 +: 2];
 wire [1:0] sw_ram = sw[11*8 +: 2];
 wire sw_ms7007 = sw[12*8];
-wire sw_reset = sw[14*8];
+wire sw_reset = sw[15*8];
+assign pal = sw[13*8];
 
 // ------------------------------------------------------------------ the machine
 
@@ -338,13 +378,14 @@ wire beep;
 wire [9:0] ay_sound;
 wire [7:0] dac8;
 
-orion_system orion (
+orion_system #(.PHYS_FDD(1)) orion (
 	.clk(clk_sys),
 	.reset(areset || sw_reset || mcu_busy),
 	.cpu_z80(sw_z80),
 	.cpu_speed(sw_speed),
 	.ram_size(sw_ram),
 	.kb_ms7007(sw_ms7007),
+	.joy(joy_l | joy_r),
 	.rom_active(rom_active),
 	.rom_addr(rom_addr[21:0]),
 	.rom_data(rom_data),
@@ -368,6 +409,8 @@ orion_system orion (
 	.img_q_ack(img_q_ack),
 	.kb_scancode(kb_scancode),
 	.kb_scancode_upd(kb_scancode_upd),
+	.clk_pix(clk_pix),
+	.pal(pal),
 	.rgb(video_rgb),
 	.hs(video_hs),
 	.vs(video_vs),
@@ -379,6 +422,11 @@ orion_system orion (
 	.rtc_wr_n(rtc_wr_n),
 	.beep(beep),
 	.ay_sound(ay_sound),
+	.img_phys_wr(img_phys_wr),
+	.img_phys(img_phys),
+	.FDC_INDEX(FDC_INDEX), .FDC_DRIVE(FDC_DRIVE), .FDC_MOTOR(FDC_MOTOR), .FDC_DIR(FDC_DIR), .FDC_STEP(FDC_STEP),
+	.FDC_WDATA(FDC_WDATA), .FDC_WGATE(FDC_WGATE), .FDC_TR00(FDC_TR00), .FDC_WPRT(FDC_WPRT), .FDC_RDATA(FDC_RDATA),
+	.FDC_SIDE_N(FDC_SIDE_N),
 	.tape_in(TAPE_IN),
 	.tape_out(TAPE_OUT),
 	.dac(dac8),
@@ -389,17 +437,33 @@ orion_system orion (
 
 // ------------------------------------------------------------------ OSD
 
+// the OSD commands of kg_mcu (clk_sys) into clk_pix: a word that changes is a command, it crosses
+// through a fifo and comes out as a change again (as core-msx)
+reg [15:0] osd_cmd_d = 16'd0;
+always @(posedge clk_sys)
+	osd_cmd_d <= osd_command;
+wire osd_fifo_empty;
+wire [15:0] osd_cmd_pix;
+kg_async_fifo #(.DW(16), .AW(4)) osd_fifo (
+	.wclk(clk_sys), .wreset(areset), .wr(osd_command != osd_cmd_d), .din(osd_command), .full(),
+	.rclk(clk_pix), .rreset(areset), .rd(!osd_fifo_empty), .dout(osd_cmd_pix), .empty(osd_fifo_empty),
+	.rcount()
+);
+
 // in the middle of 800 x 600: the counters start at the leading edge of the syncs, a step is two
 // pixels / lines: the picture starts 216 pixels and 27 lines after them, the OSD (512 x 416) 144
-// pixels and 92 lines into it
+// pixels and 92 lines into it. 720 x 576: the OSD at x 104, 236 pixels (118 steps) after hsync, and
+// 124 lines (62 steps) after vsync
 wire [23:0] osd_rgb;
-kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100)) osd (
-	.clk(clk_sys),
+kg_osd_overlay #(.H_DIV4_WIDTH(1100), .V_OFFSET_IN(1), .H_OFFSET_IN(1)) osd (
+	.clk(clk_pix),
 	.rgb_i(video_rgb),
 	.rgb_o(osd_rgb),
 	.hsync_i(video_hs),
 	.vsync_i(video_vs),
-	.osd_command(osd_command)
+	.v_offset(pal ? 11'd62 : 11'd59),
+	.h_offset(pal ? 11'd118 : 11'd180),
+	.osd_command(osd_cmd_pix)
 );
 
 // ------------------------------------------------------------------ audio
@@ -420,11 +484,11 @@ assign BEEPER = beep;
 
 // ------------------------------------------------------------------ VGA
 
-// 800 x 600: positive syncs
+// 800 x 600: positive syncs; 720 x 576: negative
 assign VGA_R = osd_rgb[23:16];
 assign VGA_G = osd_rgb[15:8];
 assign VGA_B = osd_rgb[7:0];
-assign VGA_HS = video_hs;
-assign VGA_VS = video_vs;
+assign VGA_HS = pal ? ~video_hs : video_hs;
+assign VGA_VS = pal ? ~video_vs : video_vs;
 
 endmodule
