@@ -38,6 +38,12 @@ module orion_system #(
 	input wire [1:0] cpu_speed,  // the Z80: 0 2.5, 1 5, 2 10 MHz
 	input wire [1:0] ram_size,   // 0 256, 1 512 KB, 2 1 MB
 	input wire kb_ms7007,        // MS7007 keyboard (else RK-86), change it with a reset
+	input wire mon_hi,           // the second 2 KB of a Monitor file of 4 KB; a change resets the machine
+	// the UART of the Orion-2010 (F764 / F765) through kg_mcu_uart
+	input wire [7:0] uart_rx_data,
+	input wire [7:0] uart_rx_idx,
+	output wire [7:0] uart_tx_data,
+	output wire uart_tx_wr,
 	input wire [12:0] joy,       // the joysticks as keys (orion_kbd)
 
 	// the ROM loader of the mcu
@@ -112,12 +118,14 @@ module orion_system #(
 
 // a change of the processor resets the machine for 16 states, the new one starts from the Monitor
 reg z80 = 1'b0;
+reg mhi = 1'b0;
 reg [7:0] sw_cnt = 8'd0;
 always @(posedge clk) begin
 	if (sw_cnt != 8'd0)
 		sw_cnt <= sw_cnt - 8'd1;
-	else if (cpu_z80 != z80) begin
+	else if (cpu_z80 != z80 || mon_hi != mhi) begin
 		z80 <= cpu_z80;
+		mhi <= mon_hi;
 		sw_cnt <= 8'd255;
 	end
 end
@@ -189,6 +197,7 @@ wire [7:0] sdc_in_data;
 wire [7:0] fdc_do;
 wire [7:0] sdc_img_mounted;
 reg key_irq = 1'b0;           // the keyboard interrupt of the Orion-2010
+reg uart_irq = 1'b0;
 reg [7:0] r76;                // a read of F762..F769
 wire [1:0] hd_rd, hd_wr;
 wire [63:0] sdc_img_size;
@@ -255,7 +264,7 @@ always @(posedge clk) begin
 	else if (int_hold != 11'd0)
 		int_hold <= int_hold - 11'd1;
 end
-assign int_n = !(z80 && (int_hold != 11'd0 || key_irq));
+assign int_n = !(z80 && (int_hold != 11'd0 || key_irq || uart_irq));
 
 // the Monitor everywhere after reset
 reg ipl = 1'b1;
@@ -317,7 +326,7 @@ wire [21:0] ram_addr = { 2'd0, page[3:1], ram_a, page[0] };
 wire sel_rom = !mem_wr && !full && (ipl || (top_f800 && !p767[1]));
 wire sel_rd = sel_f5 && a[1:0] == 2'd0;
 
-wire [21:0] sram_addr = sel_rom ? { 11'b10000000000, a[10:0] } :
+wire [21:0] sram_addr = sel_rom ? { 10'b1000000000, mhi, a[10:0] } :
                         sel_rd  ? { 2'b01, pfe[3:2], pfe[1:0] | p767[4:3], rd_pc, rd_pb } :
                         ram_addr;
 wire sram_we = mem_wr && !sel_dev && (!top_f800 || p767[2]);
@@ -325,7 +334,7 @@ wire sram_we = mem_wr && !sel_dev && (!top_f800 || p767[2]);
 always @* begin
 	cpu_di = 8'hFF;
 	if (inta && !mem_rd)      // the T80 shows M1 and IORQ together for a moment after reset
-		cpu_di = key_irq ? 8'hFB : 8'hFF;
+		cpu_di = uart_irq ? 8'hFD : key_irq ? 8'hFB : 8'hFF;
 	else if (rd_dev && sel_f76 && a[3:0] >= 4'h2 && a[3:0] <= 4'h9)
 		cpu_di = r76;
 	else if (io_rd && io_f4)
@@ -406,12 +415,45 @@ always @(posedge clk) begin
 end
 assign dac = dac_r;
 
+// the UART: a byte of the mcu is there when its index changes, until a read of F764; a write of F764
+// sends a byte (the mcu queues it, the transmitter is always ready); F765 D6 enables the interrupt of
+// a received byte (vector FD). The speed bits are not used: the firmware has its own.
+reg [7:0] uart_idx_d = 8'd0;
+reg uart_rdy = 1'b0;
+reg uart_ie = 1'b0;
+reg rd764_d = 1'b0;
+wire rd764 = rd_dev && sel_f76 && a[3:0] == 4'h4;
+always @(posedge clk) begin
+	uart_idx_d <= uart_rx_idx;
+	rd764_d <= rd764;
+	if (run_reset) begin
+		uart_rdy <= 1'b0;
+		uart_ie <= 1'b0;
+		uart_irq <= 1'b0;
+	end
+	else begin
+		if (uart_rx_idx != uart_idx_d) begin
+			uart_rdy <= 1'b1;
+			if (uart_ie && z80)
+				uart_irq <= 1'b1;
+		end
+		else if (rd764_d && !rd764)
+			uart_rdy <= 1'b0;
+		if (w76 && a[3:0] == 4'h5)
+			uart_ie <= cpu_do[6];
+		if (inta && !mem_rd)
+			uart_irq <= 1'b0;
+	end
+end
+assign uart_tx_data = cpu_do;
+assign uart_tx_wr = w76 && a[3:0] == 4'h4;
+
 always @* begin
 	case (a[3:0])
 		4'h2: r76 = 8'hFF;
 		4'h3: r76 = mmc_do;
-		4'h4: r76 = 8'hFF;                        // UART data
-		4'h5: r76 = 8'h3F;                        // UART: the transmitter ready, nothing received
+		4'h4: r76 = uart_rx_data;                 // UART data
+		4'h5: r76 = { 1'b0, uart_rdy, 6'h3F };    // UART: D7 0 the transmitter ready, D6 a byte received
 		4'h7: r76 = { p767[7], p767_turbo, p767[4:3], p767[2:0] };
 		4'h8: r76 = scan_key;
 		4'h9: r76 = { key_pref, 6'd0 };

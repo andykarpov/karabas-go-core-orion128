@@ -8,7 +8,7 @@
  rom_addr. An FL item writes by the slot of file_slot (the mcu writes a byte in ten clocks or less
  often, the slot is right from the first byte on; the machine is in reset meanwhile):
    slot 0  a ROM disk at 100000
-   slot 2  a Monitor at 200000, 2 KB
+   slot 2  a Monitor at 200000, 2 KB, or two of them in 4 KB (M3435 of the Orion-2010, Monitor half)
    slot 1  an ORDOS file (.ord, .bru) appended to the RAM disk B:
    slot 3  a tape file (.rko): the same after the 77 bytes of its tape header
 
@@ -102,7 +102,7 @@ always @(posedge clk) begin
 		end
 		else if (file_slot == 8'd2) begin
 			pend <= 1'b1;
-			pend_addr <= { 11'b10000000000, file_addr[10:0] };
+			pend_addr <= { 10'b1000000000, file_addr[11:0] };
 			pend_data <= file_data;
 		end
 		else if (ord_slot && in_rec) begin
