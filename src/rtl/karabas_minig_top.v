@@ -133,7 +133,6 @@ assign FLASH_SCK = 1'b0;
 assign FLASH_WP_N = 1'b1;
 assign FLASH_HOLD_N = 1'b1;
 
-assign TAPE_OUT = 1'b0;
 assign ADC_CLK = 1'b0;
 assign ADC_BCK = 1'bz;
 assign ADC_LRCK = 1'bz;
@@ -381,6 +380,8 @@ orion_system orion (
 	.rtc_wr_n(rtc_wr_n),
 	.beep(beep),
 	.ay_sound(ay_sound),
+	.tape_in(TAPE_IN),
+	.tape_out(TAPE_OUT),
 	.dac(dac8),
 	.MA(MA),
 	.MD(MD),
@@ -404,7 +405,7 @@ kg_osd_overlay #(.H_OFFSET(180), .V_OFFSET(59), .H_DIV4_WIDTH(1100)) osd (
 
 // ------------------------------------------------------------------ audio
 
-wire [15:0] audio = (beep ? 16'h1800 : 16'h0000) + { 2'b00, ay_sound, 4'b0000 } + { 3'b000, dac8, 5'b00000 };
+wire [15:0] audio = (beep ? 16'h1800 : 16'h0000) + (TAPE_OUT ? 16'h0400 : 16'h0000) + { 2'b00, ay_sound, 4'b0000 } + { 3'b000, dac8, 5'b00000 };
 
 kg_pcm5102 #(.DIV_BITS(2)) dac (  // bck 5 MHz, 156 kHz
 	.clk(clk_sys),
