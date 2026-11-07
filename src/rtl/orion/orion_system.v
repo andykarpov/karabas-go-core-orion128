@@ -594,10 +594,32 @@ always @(posedge clk)
 	else if (wr_p && mem_wr && sel_rgk)
 		rgu <= { 3'd0, ~cpu_do[0], 3'd0, cpu_do[1] };
 
-// 5 MHz: a read of the Z80 at 10 MHz lasts 250 ns
+// 5 MHz
 reg [2:0] fdc_div = 3'd0;
 always @(posedge clk)
 	fdc_div <= fdc_div + 3'd1;
+
+// wd1793 samples its strobes on ce only (every 8 clocks): a memory read of the Z80 at 10 MHz (F703) is
+// 8 clocks or less and could fall between two (core-orionpro found it: no boot from a disk at 10 MHz).
+// So an access is held from its start to the first ce after its end, with its address and data.
+wire fdc_ce = fdc_div == 3'd0;
+wire fdc_acc = sel_fdc && !phys_now;
+reg fdc_rd_s = 1'b0, fdc_wr_s = 1'b0;
+reg [1:0] fdc_a_s = 2'd0;
+reg [7:0] fdc_d_s = 8'd0;
+always @(posedge clk) begin
+	if (fdc_acc && (mem_rd || mem_wr)) begin
+		fdc_rd_s <= mem_rd;
+		fdc_wr_s <= mem_wr;
+		fdc_a_s <= a[1:0];
+		if (mem_wr)
+			fdc_d_s <= cpu_do;
+	end
+	else if (fdc_ce) begin
+		fdc_rd_s <= 1'b0;
+		fdc_wr_s <= 1'b0;
+	end
+end
 
 wire drive = rgu[0];
 
@@ -650,13 +672,13 @@ wire [7:0] sd_do_a, sd_do_b, sd_buff_din;
 
 wd1793 #(.RWMODE(1), .EDSK(0)) fdc (
 	.clk_sys(clk),
-	.ce(fdc_div == 3'd0),
+	.ce(fdc_ce),
 	.reset(run_reset),
-	.io_en(sel_fdc & ~phys_now),
-	.rd(mem_rd),
-	.wr(mem_wr),
-	.addr(a[1:0]),
-	.din(cpu_do),
+	.io_en(1'b1),
+	.rd(fdc_rd_s),
+	.wr(fdc_wr_s),
+	.addr(fdc_acc ? a[1:0] : fdc_a_s),  // the read data follows the address of the access
+	.din(fdc_d_s),
 	.dout(fdc_do),
 	.drq(fdc_drq),
 	.intrq(),
